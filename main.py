@@ -1,4 +1,3 @@
-
 import os
 import json
 import time
@@ -43,28 +42,12 @@ def get_name_lookup():
     type_map = {e["id"]: e["element_type"] for e in elements}
     return name_map, type_map
 
-
-def load_cache():
-    if not os.path.exists(CACHE_FILE):
-        return None
-    with open(CACHE_FILE, "r") as f:
-        try:
-            data = json.load(f)
-            if time.time() - data.get("_timestamp", 0) > CACHE_TTL_SECONDS:
-                print("🕒 Cache er for gammel – henter ny data.")
-                return None
-            return data
-        except Exception as e:
-            print(f"⚠️ Kunne ikke laste cache: {e}")
-            return None
-
-def save_cache(events_list):
-    with open(CACHE_FILE, "w") as f:
-        json.dump({"_timestamp": time.time(), "events": events_list}, f, indent=2)
+def save_event_cache(events):
+    save_cache(CACHE_FILE, {"events": events})
 
 def fetch_event(event_id: int = None):
     try:
-        cache = load_cache()
+        cache = load_cache(CACHE_FILE, CACHE_TTL_SECONDS)
         if cache and "events" in cache:
             events = cache["events"]
         else:
@@ -74,7 +57,7 @@ def fetch_event(event_id: int = None):
             events = response.json()
             if not isinstance(events, list):
                 raise ValueError(f"Forventet liste fra API, fikk: {type(events)}")
-            save_cache(events)
+            save_event_cache(events)
 
         if event_id is not None:
             match = next((ev for ev in events if ev.get("id") == event_id), None)
@@ -173,7 +156,7 @@ def main():
     try:
         event = fetch_event()
         if event:
-            cache = load_cache()
+            cache = load_cache(CACHE_FILE, CACHE_TTL_SECONDS)
             if cache and str(event['id']) in cache.get("_posted", []):
                 print(f"⏳ Runde {event['id']} er allerede postet. Hopper over.")
                 return
@@ -184,7 +167,7 @@ def main():
 
             if cache:
                 cache.setdefault("_posted", []).append(str(event['id']))
-                save_cache(cache["events"])
+                save_event_cache(cache["events"])
         else:
             print("🚫 Ingen aktiv runde funnet.")
     except Exception as e:
