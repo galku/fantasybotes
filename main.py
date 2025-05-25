@@ -2,6 +2,7 @@ import os
 import json
 import time
 import requests
+import subprocess
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from cache_utils import load_cache, save_cache
@@ -32,6 +33,8 @@ def get_name_lookup():
         r = requests.get(BOOTSTRAP_URL)
         cache = r.json()
         save_cache(BOOTSTRAP_FILE, cache)
+        print("🚀 Kjører diff-sjekk for bootstrap-static...")
+        subprocess.run(["python", "bootstrap_diff.py"])
     else:
         print("📂 Bruker cachet bootstrap-static")
 
