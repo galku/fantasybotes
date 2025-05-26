@@ -41,11 +41,17 @@ def detect_changes(new_data, old_data):
 
         name = f"{new['first_name']} {new['second_name']}"
 
-        # Prisendring
-        if new.get("now_cost") != old.get("now_cost"):
-            delta = new["now_cost"] - old["now_cost"]
+        # Prisendringer med datainnlegg for å legge til "komma" (e.g. Kasper Høgh som 10.9 fremfor 109)
+        try:
+            new_value = float(new.get("now_cost", 0)) / 10
+            old_value = float(old.get("now_cost", 0)) / 10
+        except (TypeError, ValueError):
+            continue
+
+        if new_value != old_value:
+            delta = new_value - old_value
             emoji = "📈" if delta > 0 else "📉"
-            messages.append(f"{emoji} {name} prisendring: {old['now_cost']} ➝ {new['now_cost']}")
+            messages.append(f"{emoji} {name} prisendring: {old_value:.1f} ➝ {new_value:.1f}")
 
         # Nyheter
         if new.get("news") and new.get("news") != old.get("news"):
