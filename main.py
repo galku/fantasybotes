@@ -2,10 +2,10 @@ import os
 import json
 import time
 import requests
-import subprocess
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from cache_utils import load_cache, save_cache
+import subprocess
 
 load_dotenv()
 
@@ -33,8 +33,6 @@ def get_name_lookup():
         r = requests.get(BOOTSTRAP_URL)
         cache = r.json()
         save_cache(BOOTSTRAP_FILE, cache)
-        print("🚀 Kjører diff-sjekk for bootstrap-static...")
-        subprocess.run(["python", "bootstrap_diff.py"])
     else:
         print("📂 Bruker cachet bootstrap-static")
 
@@ -45,14 +43,11 @@ def get_name_lookup():
     type_map = {e["id"]: e["element_type"] for e in elements}
     return name_map, type_map
 
-def save_event_cache(events):
-    save_cache(CACHE_FILE, {"events": events})
-
 def fetch_event(event_id: int = None):
     try:
-        cache = load_cache(CACHE_FILE, CACHE_TTL_SECONDS)
-        if cache and "events" in cache:
-            events = cache["events"]
+        cache_data = load_cache(CACHE_FILE, CACHE_TTL_SECONDS)
+        if cache_data and "events" in cache_data:
+            events = cache_data["events"]
         else:
             response = requests.get(API_URL)
             if response.status_code != 200:
@@ -60,13 +55,10 @@ def fetch_event(event_id: int = None):
             events = response.json()
             if not isinstance(events, list):
                 raise ValueError(f"Forventet liste fra API, fikk: {type(events)}")
-            save_event_cache(events)
+            save_cache(CACHE_FILE, {"events": events})
 
         if event_id is not None:
-            match = next((ev for ev in events if ev.get("id") == event_id), None)
-            if not match:
-                print(f"⚠️ Ingen runde med id={event_id} funnet.")
-            return match
+            return next((ev for ev in events if ev.get("id") == event_id), None)
 
         return next((ev for ev in events if ev.get("is_current")), None)
 
@@ -104,7 +96,6 @@ def format_message(event, name_lookup):
         val = event.get(key)
         return name_map.get(val, "Ukjent") if val else "?"
 
-    # 🧩 Status & nøkkelinformasjon
     msg += "> **Status:** {}\n".format(status_emoji)
     msg += "> **Overganger:** {}\n".format(event.get('transfers_made', 0))
     msg += "> **Mest valgt:** {} 🏋️\n".format(name_or_unknown('most_selected'))
@@ -119,32 +110,26 @@ def format_message(event, name_lookup):
     else:
         msg += "> **Toppspiller:** Ikke tilgjengelig ennå 🫡\n"
 
-    # 📊 Chips brukt
     msg += "\n📊 **Chips brukt:** 📊\n"
     chips = event.get("chip_plays", [])
     if chips:
-        msg += "> "  # Start blokksitat
-        msg += "\n> ".join(
-            f"{format_chip_name(chip['chip_name'])[1]} {format_chip_name(chip['chip_name'])[0]}: {chip['num_played']}"
-            for chip in chips
-        )
-        msg += "\n"
+        msg += "> " + "\n> ".join(
+            f"{format_chip_name(c['chip_name'])[1]} {format_chip_name(c['chip_name'])[0]}: {c['num_played']}"
+            for c in chips
+        ) + "\n"
     else:
         msg += "> ⚠️ Data ikke tilgjengelig. Sannsynligvis er ikke runden spilt ennå.\n"
 
-    # 🌟 Rundens lag
     if event.get("finished"):
         dream = fetch_dream_team(event["id"])
         team = dream.get("team", [])
         msg += "\n🌟 **Rundens lag:**\n"
         if team:
             sorted_team = sorted(team, key=lambda x: x.get("position", 99))
-            msg += "> "
-            msg += "\n> ".join(
+            msg += "> " + "\n> ".join(
                 f"{ {1: '🧤', 2: '🛡️', 3: '🍋', 4: '⚔️'}.get(type_map.get(p['element']), '❔') } {name_map.get(p['element'], 'Ukjent')} – {p['points']} poeng"
                 for p in sorted_team
-            )
-            msg += "\n"
+            ) + "\n"
         else:
             msg += "> Ingen data for rundens lag.\n"
 
@@ -170,9 +155,15 @@ def main():
 
             if cache:
                 cache.setdefault("_posted", []).append(str(event['id']))
-                save_event_cache(cache["events"])
+                save_cache(CACHE_FILE, cache)
+
         else:
             print("🚫 Ingen aktiv runde funnet.")
+
+        # Kjør differansecheck etterpå
+        print("🔍 Kjører bootstrap_diff.py...")
+        subprocess.run(["python", "bootstrap_diff.py"])
+
     except Exception as e:
         print("Feil ved henting eller posting:", e)
 
