@@ -1,108 +1,99 @@
-# 📊 bootstrap_diff.py – sammenligner ny og gammel bootstrap-static
-
 import os
 import json
-import requests
-from cache_utils import load_cache, save_cache
-from dotenv import load_dotenv
+import subprocess
+import traceback
+from utils.discord_bot_sender import post_to_discord
 
-load_dotenv()
+SERVERS_FILE = "servers.json"
 
-BOOTSTRAP_FILE = "bootstrap_cache.json"
-PREVIOUS_FILE = "bootstrap_previous.json"
-NEWS_CHANNEL_ID = os.getenv("DISCORD_NEWS_CHANNEL_ID")
-DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+try:
+    with open(SERVERS_FILE, "r") as f:
+        SERVERS = json.load(f)
+except FileNotFoundError:
+    print(f"❌ Fant ikke {SERVERS_FILE}. Sørg for at fila eksisterer.")
+    SERVERS = []
+except json.JSONDecodeError as e:
+    print(f"🚨 Klarte ikke parse {SERVERS_FILE}: {e}")
+    SERVERS = []
 
-
-def load_latest_bootstrap():
-    if not os.path.exists(BOOTSTRAP_FILE):
-        print("🚫 Fant ikke cachet bootstrap-static.")
-        return None
-    with open(BOOTSTRAP_FILE, "r") as f:
-        return json.load(f)
-
-
-def load_previous():
-    if not os.path.exists(PREVIOUS_FILE):
-        return {}
-    with open(PREVIOUS_FILE, "r") as f:
-        return json.load(f)
-
-
-def detect_changes(new_data, old_data):
-    messages = []
-    new_elements = {e["id"]: e for e in new_data.get("elements", [])}
-    old_elements = {e["id"]: e for e in old_data.get("elements", [])}
-
-    for player_id, new in new_elements.items():
-        old = old_elements.get(player_id)
-        if not old:
-            continue
-
-        name = f"{new['first_name']} {new['second_name']}"
-
-        # Prisendringer med datainnlegg for å legge til "komma" (e.g. Kasper Høgh som 10.9 fremfor 109)
-        try:
-            new_value = float(new.get("now_cost", 0)) / 10
-            old_value = float(old.get("now_cost", 0)) / 10
-        except (TypeError, ValueError):
-            continue
-
-        if new_value != old_value:
-            delta = new_value - old_value
-            emoji = "📈" if delta > 0 else "📉"
-            messages.append(f"{emoji} {name} prisendring: {old_value:.1f} ➝ {new_value:.1f}")
-
-        # Nyheter
-        if new.get("news") and new.get("news") != old.get("news"):
-            messages.append(f"📰 {name} – Nyhet: {new['news']}")
-
-    return messages
-
-
-def save_current_as_previous():
+def run_diff():
+    print("🔍 Kjører bootstrap_diff.py...")
     try:
-        with open(BOOTSTRAP_FILE, "r") as f:
-            current = json.load(f)
-        with open(PREVIOUS_FILE, "w") as f:
-            json.dump(current, f, indent=2)
-        print("💾 Lagret snapshot av bootstrap_static for neste sammenligning.")
+        result = subprocess.run(
+            ["python", "bootstrap_diff.py"], capture_output=True, text=True, timeout=60
+        )
+
+        if result.returncode != 0:
+            error_msg = f"🚨 Feil i bootstrap_diff.py: {result.stderr.strip()}"
+            print(error_msg)
+            for server in SERVERS:
+                try:
+                    post_to_discord(server["log_channel_id"], error_msg)
+                except Exception as e:
+                    print(f"⚠️ Feil ved sending til {server['guild_name']}: {e}")
+            return
+
+        output = result.stdout.strip()
+
+        if not output:
+            msg = "⚠️ Ingen output fra bootstrap_diff.py."
+            print(msg)
+            for server in SERVERS:
+                try:
+                    post_to_discord(server["log_channel_id"], msg)
+                except Exception as e:
+                    print(f"⚠️ Feil ved sending til {server['guild_name']}: {e}")
+            return
+
+        # Nyhetsblokk
+        if "🔔" in output:
+            lines = output.splitlines()
+            news_block = "\n".join(
+                line for line in lines if line.startswith(("🔔", "📉", "📈", "📰"))
+            )
+            if news_block:
+                for server in SERVERS:
+                    try:
+                        post_to_discord(server["news_channel_id"], news_block)
+                    except Exception as e:
+                        print(f"⚠️ Feil ved nyhets-posting til {server['guild_name']}: {e}")
+            else:
+                print("⚠️ Fant ikke formatert nyhetsblokk.")
+
+        else:
+            for server in SERVERS:
+                try:
+                    post_to_discord(server["log_channel_id"], "✅ Ingen relevante endringer funnet.")
+                except Exception as e:
+                    print(f"⚠️ Feil ved logg-posting til {server['guild_name']}: {e}")
+
+        # Snapshot
+        if "💾" in output:
+            snapshot_line = next((line for line in output.splitlines() if line.startswith("💾")), None)
+            if snapshot_line:
+                for server in SERVERS:
+                    try:
+                        post_to_discord(server["log_channel_id"], snapshot_line)
+                    except Exception as e:
+                        print(f"⚠️ Feil ved snapshot-posting til {server['guild_name']}: {e}")
+
+    except subprocess.TimeoutExpired:
+        timeout_msg = "⏱️ bootstrap_diff.py brukte for lang tid (>60s) og ble stoppet."
+        print(timeout_msg)
+        for server in SERVERS:
+            try:
+                post_to_discord(server["log_channel_id"], timeout_msg)
+            except Exception as e:
+                print(f"⚠️ Feil ved timeout-posting til {server['guild_name']}: {e}")
+
     except Exception as e:
-        print(f"⚠️ Klarte ikke lagre snapshot: {e}")
-
-
-def post_to_discord_channel(content: str):
-    if not DISCORD_BOT_TOKEN or not NEWS_CHANNEL_ID:
-        print("🚫 Discord-token eller kanal-ID mangler.")
-        return
-
-    url = f"https://discord.com/api/v10/channels/{NEWS_CHANNEL_ID}/messages"
-    headers = {
-        "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    payload = {"content": content[:2000]}
-
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 200 or response.status_code == 204:
-        print("✅ Endringer postet til Discord.")
-    else:
-        print(f"⚠️ Feil ved posting til Discord: {response.status_code} – {response.text}")
-
+        err_trace = traceback.format_exc()
+        print(f"🚨 Uventet feil: {e}\n{err_trace}")
+        for server in SERVERS:
+            try:
+                post_to_discord(server["log_channel_id"], f"🚨 Unntak:\n{e}\n{err_trace}")
+            except Exception as inner_e:
+                print(f"⚠️ Feil ved feilhåndtering for {server['guild_name']}: {inner_e}")
 
 if __name__ == "__main__":
-    new_data = load_latest_bootstrap()
-    old_data = load_previous()
-
-    if new_data and old_data:
-        changes = detect_changes(new_data, old_data)
-        if changes:
-            message = "**🔔 Oppdateringer i Fantasy-data:**\n" + "\n".join(f"> {line}" for line in changes)
-            print(message)
-            post_to_discord_channel(message)
-        else:
-            print("✅ Ingen relevante endringer funnet.")
-    else:
-        print("⚠️ Mangler data for sammenligning.")
-
-    save_current_as_previous()
+    run_diff()
