@@ -20,7 +20,9 @@ except json.JSONDecodeError as e:
 def run_diff():
     print("🔍 Kjører bootstrap_diff.py...")
     try:
-        result = subprocess.run(["python", "bootstrap_diff.py"], capture_output=True, text=True)
+        import sys
+        python_executable = sys.executable
+        result = subprocess.run([python_executable, "bootstrap_diff.py"], capture_output=True, text=True)
 
         if result.returncode != 0:
             error_msg = f"🚨 Feil i bootstrap_diff.py: {result.stderr.strip()}"
