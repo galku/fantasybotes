@@ -1,4 +1,5 @@
 # bootstrap_diff.py
+
 import os
 import sys
 import json
@@ -78,9 +79,8 @@ def main():
     save_cache(PREVIOUS_FILE, current)
 
     if messages:
-        combined = "\n".join(["🔔 Oppdateringer i Fantasy-data:"] + messages)
         print("✅ Endringer funnet. Sender til nyhetskanaler...")
-        return combined
+        return "\n".join(["🔔 Oppdateringer i Fantasy-data:"] + messages)
     else:
         print("✅ Ingen relevante endringer funnet.")
         return None
@@ -92,8 +92,8 @@ if __name__ == "__main__":
         for server in SERVER_CONFIGS:
             guild_id = server["guild_id"]
             if result:
-                post_to_discord(result, guild_id=guild_id, channel_type="news")
+                post_to_discord(message=result, guild_id=guild_id, channel_type="news")
             else:
-                post_to_discord("✅ Ingen endringer å vise i direkte kjøring.", guild_id=guild_id, channel_type="log")
+                post_to_discord(message="✅ Ingen endringer å vise i direkte kjøring.", guild_id=guild_id, channel_type="log")
     except Exception as e:
         print(f"🛑 Uventet feil i bootstrap_diff: {e}", file=sys.stderr)
