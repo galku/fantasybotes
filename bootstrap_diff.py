@@ -91,9 +91,11 @@ if __name__ == "__main__":
         result = main()
         for server in SERVER_CONFIGS:
             guild_id = server["guild_id"]
-            if result:
-                post_to_discord(message=result, guild_id=guild_id, channel_type="news")
+            if result and result.startswith("🔔"):
+                post_to_discord(result, guild_id=guild_id, channel_type="news")
             else:
-                post_to_discord(message="✅ Ingen endringer å vise i direkte kjøring.", guild_id=guild_id, channel_type="log")
+                post_to_discord("✅ Ingen endringer å vise i direkte kjøring.", guild_id=guild_id, channel_type="log")
     except Exception as e:
-        print(f"🛑 Uventet feil i bootstrap_diff: {e}", file=sys.stderr)
+        for server in SERVER_CONFIGS:
+            guild_id = server["guild_id"]
+            post_to_discord(f"🛑 Feil i bootstrap_diff.py: {e}", guild_id=guild_id, channel_type="log")
