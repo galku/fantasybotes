@@ -4,7 +4,6 @@ import os
 import sys
 import json
 import requests
-from datetime import datetime
 from cache_utils import save_cache
 from utils.discord_bot_sender import post_to_discord
 from dotenv import load_dotenv
@@ -71,7 +70,7 @@ def compare_players(current, previous):
 def main():
     current = fetch_bootstrap_data()
     if not current:
-        return None
+        return {"log": "🚨 Kunne ikke hente nåværende bootstrap-data."}
 
     previous = load_previous_data()
     messages = compare_players(current, previous)
@@ -80,10 +79,11 @@ def main():
 
     if messages:
         print("✅ Endringer funnet. Sender til nyhetskanaler...")
-        return "\n".join(["🔔 Oppdateringer i Fantasy-data:"] + messages)
+        news = "\n".join(["🔔 Oppdateringer i Fantasy-data:"] + messages)
+        return {"news": news}
     else:
         print("✅ Ingen relevante endringer funnet.")
-        return None
+        return {"log": "✅ Ingen endringer å vise i direkte kjøring."}
 
 
 if __name__ == "__main__":
@@ -91,10 +91,10 @@ if __name__ == "__main__":
         result = main()
         for server in SERVER_CONFIGS:
             guild_id = server["guild_id"]
-            if result and result.startswith("🔔"):
-                post_to_discord(result, guild_id=guild_id, channel_type="news")
-            else:
-                post_to_discord("✅ Ingen endringer å vise i direkte kjøring.", guild_id=guild_id, channel_type="log")
+            if result.get("news"):
+                post_to_discord(result["news"], guild_id=guild_id, channel_type="news")
+            if result.get("log"):
+                post_to_discord(result["log"], guild_id=guild_id, channel_type="log")
     except Exception as e:
         for server in SERVER_CONFIGS:
             guild_id = server["guild_id"]
