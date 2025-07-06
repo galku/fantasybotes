@@ -9,7 +9,7 @@ from bootstrap_runner import SERVERS_FILE
 
 def notify_deadlines():
     print("🔔 Kjører deadline-påminnelse...")
-    gameweek = get_current_gameweek_info()
+    gameweek = fetch_event()
     if not gameweek:
         print("❌ Kunne ikke finne gjeldende runde.")
         return
