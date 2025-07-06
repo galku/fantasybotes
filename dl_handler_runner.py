@@ -1,11 +1,10 @@
 import json
 import time
-from utils.bootstrap import get_current_gameweek_info
 from utils.news_tracker import get_news_since_last_deadline
 from utils.deadline_formatter import format_deadline_message
 from utils.discord_bot_sender import post_to_discord
 from cache_utils import load_cache, save_cache
-from main import CACHE_TTL_SECONDS,CACHE_FILE
+from main import CACHE_TTL_SECONDS,CACHE_FILE, fetch_event
 from bootstrap_runner import SERVERS_FILE
 
 def notify_deadlines():
