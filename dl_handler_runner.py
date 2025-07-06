@@ -1,10 +1,9 @@
 import json
 import time
 from utils.news_tracker import get_news_since_last_deadline
-from utils.deadline_formatter import format_deadline_message
 from utils.discord_bot_sender import post_to_discord
 from cache_utils import load_cache, save_cache
-from main import CACHE_TTL_SECONDS,CACHE_FILE, fetch_event
+from main import CACHE_TTL_SECONDS,CACHE_FILE, fetch_event, format_message, get_name_lookup
 from bootstrap_runner import SERVERS_FILE
 
 def notify_deadlines():
@@ -45,9 +44,10 @@ def notify_deadlines():
         mention = f"<@&{role_id}>" if role_id else ""
 
         # Lag melding
-        header, details = format_deadline_message(gameweek)
+        names = get_name_lookup()
+        message_body = format_message(gameweek, names)
         news_summary = get_news_since_last_deadline(gameweek_id=int(event_id), league_id=league_id)
-        message = f"{mention} ⏰ Husk å sette opp laget før deadline!\n\n{header}\n\n> {details}\n\n> {news_summary}"
+        message = f"{mention} ⏰ Husk å sette opp laget før deadline!\n\n{message_body}\n\n> {news_summary}"
 
         # Post meldingen
         post_to_discord(
