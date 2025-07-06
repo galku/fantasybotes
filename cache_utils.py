@@ -2,6 +2,7 @@ import json
 import os
 import time
 import traceback
+from typing import Optional
 
 CACHE_TIMESTAMP_FILE = "cache_timestamp.json"
 
@@ -14,18 +15,23 @@ def save_cache(filename, data):
     except Exception as e:
         print(f"🚨 Feil ved lagring av cachefil '{filename}': {e}")
 
-
-def load_cache(filename):
+def load_cache(filename, ttl_seconds=None):
     if not os.path.exists(filename):
         return None
+
+    if ttl_seconds:
+        file_age = time.time() - os.path.getmtime(filename)
+        if file_age > ttl_seconds:
+            print(f"⏳ Cachefil '{filename}' er eldre enn {ttl_seconds} sekunder. Forkaster.")
+            return None
+
     try:
         with open(filename, "r") as f:
             return json.load(f)
     except Exception as e:
         print(f"🚨 Feil ved lasting av cachefil '{filename}': {e}")
         return None
-
-
+    
 def update_cache_timestamp():
     try:
         timestamp_data = {"last_updated": int(time.time())}
