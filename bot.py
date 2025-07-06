@@ -56,7 +56,7 @@ async def deadline(ctx, runde_nr: str = None):
             if "_posted" not in cache:
                 cache["_posted"] = []
             cache["_posted"].append(cache_key)
-            save_cache(cache["events"])
+            save_cache("cache.json", {"events": cache["events"]})
 
     except Exception as e:
         print(f"[{ctx.message.created_at}] Feil ved håndtering av '!deadline': {e}")
