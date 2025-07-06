@@ -3,7 +3,7 @@ import json
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
-from main import fetch_event, get_name_lookup, format_message, load_cache, save_cache
+from main import fetch_event, get_name_lookup, format_message, load_cache, save_cache, CACHE_FILE, CACHE_TTL_SECONDS
 
 load_dotenv()
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -40,7 +40,7 @@ async def deadline(ctx, runde_nr: str = None):
             return
 
         # Caching: unngå dobbelposting ved defaultkall
-        cache = load_cache()
+        cache = load_cache(CACHE_FILE, CACHE_TTL_SECONDS)
         cache_key = str(event["id"])
         if cache and "_timestamp" in cache and "events" in cache:
             posted_ids = cache.get("_posted", [])
