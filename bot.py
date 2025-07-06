@@ -3,7 +3,8 @@ import json
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
-from main import fetch_event, get_name_lookup, format_message, load_cache, save_cache, CACHE_FILE, CACHE_TTL_SECONDS
+from main import fetch_event, get_name_lookup, format_message, CACHE_FILE, CACHE_TTL_SECONDS
+from cache_utils import load_cache, save_cache
 
 load_dotenv()
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
