@@ -9,6 +9,7 @@ import os
 import json
 
 GCS_BUCKET = os.getenv("GCS_BUCKET")
+GCS_PROJECT = os.getenv("GCS_PROJECT")
 
 _bucket = None
 
@@ -19,7 +20,7 @@ def _get_bucket():
         return None
     if _bucket is None:
         from google.cloud import storage
-        _bucket = storage.Client().bucket(GCS_BUCKET)
+        _bucket = storage.Client(project=GCS_PROJECT).bucket(GCS_BUCKET)
     return _bucket
 
 

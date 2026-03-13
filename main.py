@@ -134,6 +134,30 @@ def format_message(event, name_lookup):
 
     return msg
 
+def fetch_upcoming_event():
+    """Return the current active event, or the next upcoming one if between rounds."""
+    try:
+        cache_data = load_cache(CACHE_FILE, CACHE_TTL_SECONDS)
+        if cache_data and "events" in cache_data:
+            events = cache_data["events"]
+        else:
+            response = requests.get(API_URL)
+            response.raise_for_status()
+            events = response.json()
+            save_cache(CACHE_FILE, {"events": events})
+
+        current = next((ev for ev in events if ev.get("is_current")), None)
+        if current:
+            return current
+
+        now = int(time.time())
+        upcoming = [ev for ev in events if (ev.get("deadline_time_epoch") or 0) > now]
+        return min(upcoming, key=lambda e: e["deadline_time_epoch"]) if upcoming else None
+
+    except Exception as e:
+        print(f"⚠️ Feil i fetch_upcoming_event(): {e}")
+        return None
+
 def fetch_all_events() -> list:
     """Return list of all gameweek events, bypassing cache for freshness."""
     try:

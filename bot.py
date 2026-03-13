@@ -7,8 +7,8 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 from main import (
-    fetch_event, fetch_all_events, get_name_lookup, format_message,
-    get_bootstrap_data,
+    fetch_event, fetch_all_events, fetch_upcoming_event,
+    get_name_lookup, format_message, get_bootstrap_data,
 )
 from bootstrap_diff import compare_players, fetch_bootstrap_data, load_previous_data
 from cache_utils import save_cache
@@ -107,6 +107,10 @@ async def on_ready():
     news_update.start()
     round_completed_check.start()
 
+    await log_to_servers(
+        f"🤖 **Fantasybot er klar!** Nyheter sjekkes hvert {NEWS_INTERVAL_MINUTES}. minutt."
+    )
+
 
 # ---------------------------------------------------------------------------
 # Task: deadline reminder — fires ~1 hour before each gameweek deadline
@@ -115,7 +119,7 @@ async def on_ready():
 @tasks.loop(minutes=DEADLINE_CHECK_INTERVAL)
 async def deadline_reminder():
     try:
-        event = await asyncio.to_thread(fetch_event)
+        event = await asyncio.to_thread(fetch_upcoming_event)
         if not event:
             return
 
@@ -272,6 +276,40 @@ async def deadline_cmd(ctx, runde_nr: str = None):
 
     except Exception as e:
         print(f"Feil i !deadline: {e}")
+        await ctx.send(f"⚠️ Noe gikk galt: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Command: !testdeadline
+# Fires the deadline reminder immediately for the current round, bypassing
+# the time window check. Does NOT mark it as posted, so the real reminder
+# still fires when the time comes.
+# ---------------------------------------------------------------------------
+
+@bot.command(name="testdeadline")
+async def testdeadline_cmd(ctx):
+    try:
+        await ctx.message.delete()
+        event = await asyncio.to_thread(fetch_upcoming_event)
+        if not event:
+            await ctx.send("🚫 Ingen kommende runde funnet.")
+            return
+
+        name_lookup = await asyncio.to_thread(get_name_lookup)
+        message_body = await asyncio.to_thread(format_message, event, name_lookup)
+
+        for server in SERVERS:
+            role_id = server.get("mention_role_id")
+            mention = f"<@&{role_id}>\n" if role_id else ""
+            full_message = (
+                f"{mention}⏰ **1 time til deadline for Runde {event['id']}!**\n\n"
+                f"{message_body}"
+            )
+            channel_id = server.get("news_channel_id")
+            if channel_id:
+                await send_to_channel(channel_id, full_message)
+
+    except Exception as e:
         await ctx.send(f"⚠️ Noe gikk galt: {e}")
 
 
