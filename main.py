@@ -5,7 +5,6 @@ import requests
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from cache_utils import load_cache, save_cache
-import subprocess
 
 load_dotenv()
 
@@ -23,10 +22,9 @@ CACHE_FILE = "cache.json"
 BOOTSTRAP_FILE = "bootstrap_cache.json"
 CACHE_TTL_SECONDS = 320 * 60
 
-if not DISCORD_WEBHOOK_URL:
-    raise Exception("DISCORD_WEBHOOK_URL må settes i .env-filen")
 
-def get_name_lookup():
+def get_bootstrap_data() -> dict:
+    """Return full bootstrap-static data (player list, teams, etc.), cached."""
     cache = load_cache(BOOTSTRAP_FILE, BOOTSTRAP_CACHE_TTL)
     if not cache:
         print("🌐 Henter bootstrap-static på nytt...")
@@ -35,10 +33,11 @@ def get_name_lookup():
         save_cache(BOOTSTRAP_FILE, cache)
     else:
         print("📂 Bruker cachet bootstrap-static")
+    return cache
 
+def get_name_lookup():
+    cache = get_bootstrap_data()
     elements = cache.get("elements", [])
-    element_types = {t["id"]: t for t in cache.get("element_types", [])}
-
     name_map = {e["id"]: f"{e['first_name']} {e['second_name']}" for e in elements}
     type_map = {e["id"]: e["element_type"] for e in elements}
     return name_map, type_map
@@ -135,7 +134,25 @@ def format_message(event, name_lookup):
 
     return msg
 
+def fetch_all_events() -> list:
+    """Return list of all gameweek events, bypassing cache for freshness."""
+    try:
+        response = requests.get(API_URL)
+        if response.status_code != 200:
+            raise Exception(f"API-kall feilet: {response.status_code}")
+        events = response.json()
+        if not isinstance(events, list):
+            raise ValueError(f"Forventet liste, fikk: {type(events)}")
+        save_cache(CACHE_FILE, {"events": events})
+        return events
+    except Exception as e:
+        print(f"⚠️ Feil i fetch_all_events(): {e}")
+        return []
+
 def post_to_discord(content):
+    if not DISCORD_WEBHOOK_URL:
+        print("⚠️ DISCORD_WEBHOOK_URL er ikke satt — kan ikke sende webhook.")
+        return
     payload = {"content": content}
     r = requests.post(DISCORD_WEBHOOK_URL, json=payload)
     print("Posted to Discord:", r.status_code)
@@ -159,10 +176,6 @@ def main():
 
         else:
             print("🚫 Ingen aktiv runde funnet.")
-
-        # Kjør differansecheck etterpå
-        print("🔍 Kjører bootstrap_diff.py...")
-        subprocess.run(["python", "bootstrap_diff.py"])
 
     except Exception as e:
         print("Feil ved henting eller posting:", e)

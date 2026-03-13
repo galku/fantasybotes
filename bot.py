@@ -1,66 +1,374 @@
 import os
 import json
+import time
+import asyncio
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from dotenv import load_dotenv
-from main import fetch_event, get_name_lookup, format_message, CACHE_FILE, CACHE_TTL_SECONDS
-from cache_utils import load_cache, save_cache
+
+from main import (
+    fetch_event, fetch_all_events, get_name_lookup, format_message,
+    get_bootstrap_data,
+)
+from bootstrap_diff import compare_players, fetch_bootstrap_data, load_previous_data
+from cache_utils import save_cache
+from posted_tracker import has_been_posted, mark_as_posted
+import news_log
 
 load_dotenv()
+
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+NEWS_INTERVAL_MINUTES = int(os.getenv("NEWS_INTERVAL_MINUTES", "30"))
+DEADLINE_CHECK_INTERVAL = 15  # minutes
+
+with open("servers.json") as f:
+    SERVERS = json.load(f)
 
 intents = discord.Intents.default()
 intents.message_content = True
-
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+# Player status emoji map for !skade command
+STATUS_EMOJI = {
+    "i": "🚑",  # injured
+    "d": "⚠️",  # doubtful
+    "u": "❌",  # unavailable
+    "s": "🟨",  # suspended
+    "n": "⏸️",  # not in squad
+}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def split_message(message: str, limit: int = 2000) -> list[str]:
+    if len(message) <= limit:
+        return [message]
+    lines = message.splitlines(keepends=True)
+    chunks, current = [], ""
+    for line in lines:
+        if len(current) + len(line) <= limit:
+            current += line
+        else:
+            chunks.append(current)
+            current = line
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+async def send_to_channel(channel_id: int, message: str) -> None:
+    """Send a (possibly long) message to a channel, splitting at 2000 chars."""
+    try:
+        channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
+        for chunk in split_message(message):
+            await channel.send(chunk)
+    except discord.Forbidden:
+        print(f"🚫 Mangler tilgang til kanal {channel_id}")
+    except Exception as e:
+        print(f"❌ Feil ved sending til kanal {channel_id}: {e}")
+
+
+async def ctx_send(ctx, message: str) -> None:
+    """Reply to a command context, splitting long messages automatically."""
+    for chunk in split_message(message):
+        await ctx.send(chunk)
+
+
+async def log_to_servers(message: str) -> None:
+    """Send a service/error message to every server's log channel."""
+    for server in SERVERS:
+        channel_id = server.get("log_channel_id")
+        if channel_id:
+            await send_to_channel(channel_id, message)
+
+
+async def news_to_servers(message: str) -> None:
+    """Broadcast a news message to every server's news channel."""
+    for server in SERVERS:
+        channel_id = server.get("news_channel_id")
+        if channel_id:
+            await send_to_channel(channel_id, message)
+
+
+# ---------------------------------------------------------------------------
+# Bot events
+# ---------------------------------------------------------------------------
 
 @bot.event
 async def on_ready():
-    print(f"🤖 Bot er klar! Logget inn som {bot.user}")
+    print(f"🤖 Bot klar: {bot.user}")
+
+    # Set configurable interval before starting
+    news_update.change_interval(minutes=NEWS_INTERVAL_MINUTES)
+
+    deadline_reminder.start()
+    news_update.start()
+    round_completed_check.start()
+
+
+# ---------------------------------------------------------------------------
+# Task: deadline reminder — fires ~1 hour before each gameweek deadline
+# ---------------------------------------------------------------------------
+
+@tasks.loop(minutes=DEADLINE_CHECK_INTERVAL)
+async def deadline_reminder():
+    try:
+        event = await asyncio.to_thread(fetch_event)
+        if not event:
+            return
+
+        deadline_epoch = event.get("deadline_time_epoch")
+        if not deadline_epoch:
+            return
+
+        seconds_until = deadline_epoch - int(time.time())
+        # Post when within the 1-hour window, plus one check interval as
+        # buffer to ensure we don't miss it between two checks.
+        window = 3600 + DEADLINE_CHECK_INTERVAL * 60
+        if not (0 < seconds_until <= window):
+            return
+
+        tracker_key = f"deadline_reminder_GW{event['id']}"
+        if await asyncio.to_thread(has_been_posted, tracker_key):
+            return
+
+        name_lookup = await asyncio.to_thread(get_name_lookup)
+        message_body = await asyncio.to_thread(format_message, event, name_lookup)
+
+        for server in SERVERS:
+            role_id = server.get("mention_role_id")
+            mention = f"<@&{role_id}>\n" if role_id else ""
+            full_message = (
+                f"{mention}⏰ **1 time til deadline for Runde {event['id']}!**\n\n"
+                f"{message_body}"
+            )
+            channel_id = server.get("news_channel_id")
+            if channel_id:
+                await send_to_channel(channel_id, full_message)
+
+        await asyncio.to_thread(mark_as_posted, tracker_key)
+
+    except Exception as e:
+        await log_to_servers(f"🛑 Feil i deadline_reminder: {e}")
+
+
+@deadline_reminder.before_loop
+async def before_deadline_reminder():
+    await bot.wait_until_ready()
+
+
+# ---------------------------------------------------------------------------
+# Task: news update — checks for player price changes and injury news
+# ---------------------------------------------------------------------------
+
+@tasks.loop(minutes=30)  # overridden in on_ready via change_interval()
+async def news_update():
+    try:
+        current = await asyncio.to_thread(fetch_bootstrap_data)
+        if not current:
+            await log_to_servers("🚨 Kunne ikke hente Fantasy-data fra API.")
+            return
+
+        previous = await asyncio.to_thread(load_previous_data)
+        messages = compare_players(current, previous)
+        await asyncio.to_thread(save_cache, "bootstrap_previous.json", current)
+
+        if not messages:
+            print("✅ Ingen Fantasy-endringer funnet.")
+            return
+
+        # Log each entry to the rolling news log so !nyheter / !skade can query them
+        ts = int(time.time())
+        entries = [
+            {
+                "type": "news" if m.startswith("📰") else "price",
+                "text": m,
+                "ts": ts,
+            }
+            for m in messages
+        ]
+        await asyncio.to_thread(news_log.append_entries, entries)
+
+        news_text = "\n".join(["🔔 **Oppdateringer i Fantasy-data:**"] + messages)
+        await news_to_servers(news_text)
+
+    except Exception as e:
+        await log_to_servers(f"🛑 Feil i news_update: {e}")
+
+
+@news_update.before_loop
+async def before_news_update():
+    await bot.wait_until_ready()
+
+
+# ---------------------------------------------------------------------------
+# Task: round completed — posts summary when a gameweek finishes
+# ---------------------------------------------------------------------------
+
+@tasks.loop(minutes=15)
+async def round_completed_check():
+    try:
+        events = await asyncio.to_thread(fetch_all_events)
+        if not events:
+            return
+
+        # Only post when FPL has finalised the round (top_element_info populated)
+        finished = [
+            e for e in events
+            if e.get("finished") and isinstance(e.get("top_element_info"), dict)
+        ]
+        if not finished:
+            return
+
+        event = max(finished, key=lambda e: e["id"])
+        tracker_key = f"round_completed_GW{event['id']}"
+        if await asyncio.to_thread(has_been_posted, tracker_key):
+            return
+
+        name_lookup = await asyncio.to_thread(get_name_lookup)
+        message_body = await asyncio.to_thread(format_message, event, name_lookup)
+        full_message = f"📊 **Runde {event['id']} er ferdig!**\n\n{message_body}"
+
+        await news_to_servers(full_message)
+        await asyncio.to_thread(mark_as_posted, tracker_key)
+
+    except Exception as e:
+        await log_to_servers(f"🛑 Feil i round_completed_check: {e}")
+
+
+@round_completed_check.before_loop
+async def before_round_completed_check():
+    await bot.wait_until_ready()
+
+
+# ---------------------------------------------------------------------------
+# Command: !deadline [runde_nr]
+# ---------------------------------------------------------------------------
 
 @bot.command(name="deadline")
-async def deadline(ctx, runde_nr: str = None):
+async def deadline_cmd(ctx, runde_nr: str = None):
     try:
         await ctx.message.delete()
-        print(f"[{ctx.message.created_at}] '!deadline' trigget av {ctx.author} i {ctx.channel} med argument: {runde_nr}")
+        print(f"[{ctx.message.created_at}] '!deadline' trigget av {ctx.author} i {ctx.channel} (arg: {runde_nr})")
 
         if runde_nr and not runde_nr.isdigit():
-            print(f"[{ctx.message.created_at}] Ignorerer ugyldig argument '{runde_nr}' fra {ctx.author}")
+            print(f"Ignorerer ugyldig argument '{runde_nr}' fra {ctx.author}")
             runde_nr = None
 
-        event_id = int(runde_nr) if runde_nr else None
-        event = fetch_event(event_id)
-        print(f"🎯 fetch_event({event_id}) returnerte: {type(event)}")
+        event = await asyncio.to_thread(fetch_event, int(runde_nr) if runde_nr else None)
 
         if not event:
             await ctx.send(
                 f"🚫 Ukjent runde: {runde_nr}. Velg en runde mellom 1 og 30.\n"
-                "Er du usikker på hvilken runde som er aktiv nå, skriv bare `!deadline`."
+                "Skriv bare `!deadline` for å se aktiv runde."
             )
-            print(f"[{ctx.message.created_at}] Ukjent rundeforespørsel: {runde_nr} fra {ctx.author}")
             return
 
-        # Caching: unngå dobbelposting ved defaultkall
-        cache = load_cache(CACHE_FILE, CACHE_TTL_SECONDS)
-        cache_key = str(event["id"])
-        if cache and "_timestamp" in cache and "events" in cache:
-            posted_ids = cache.get("_posted", [])
-            if cache_key in posted_ids and not runde_nr:
-                print(f"⏳ Runde {event['id']} er allerede postet (automatisk). Hopper over.")
-                return
-
-        names = get_name_lookup()
-        message = format_message(event, names)
-        await ctx.send(message)
-
-        if not runde_nr:
-            if "_posted" not in cache:
-                cache["_posted"] = []
-            cache["_posted"].append(cache_key)
-            save_cache("cache.json", {"events": cache["events"]})
+        name_lookup = await asyncio.to_thread(get_name_lookup)
+        message = await asyncio.to_thread(format_message, event, name_lookup)
+        await ctx_send(ctx, message)
 
     except Exception as e:
-        print(f"[{ctx.message.created_at}] Feil ved håndtering av '!deadline': {e}")
-        await ctx.send(f"Feil: {e}")
+        print(f"Feil i !deadline: {e}")
+        await ctx.send(f"⚠️ Noe gikk galt: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Command: !nyheter [antall=20]
+# Shows the last N entries from the rolling news log (prices + injuries).
+# ---------------------------------------------------------------------------
+
+@bot.command(name="nyheter")
+async def nyheter_cmd(ctx, antall: str = "20"):
+    try:
+        await ctx.message.delete()
+        if not antall.isdigit():
+            await ctx.send("Bruk: `!nyheter [antall]` — f.eks. `!nyheter 50`")
+            return
+
+        n = min(int(antall), 100)
+        entries = await asyncio.to_thread(news_log.get_recent, n)
+
+        if not entries:
+            await ctx.send("Ingen nyheter logget ennå.")
+            return
+
+        lines = [f"<t:{e['ts']}:d> {e['text']}" for e in entries]
+        message = f"📰 **Siste {len(lines)} Fantasy-nyheter:**\n" + "\n".join(lines)
+        await ctx_send(ctx, message)
+
+    except Exception as e:
+        await ctx.send(f"⚠️ Noe gikk galt: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Command: !skade [lagnavn | antall]
+#   !skade fredrikstad  →  current injuries for players from that team
+#   !skade 50           →  last 50 injury news entries from the log
+# ---------------------------------------------------------------------------
+
+@bot.command(name="skade")
+async def skade_cmd(ctx, *, arg: str = None):
+    try:
+        if arg is None:
+            await ctx.send(
+                "Bruk:\n"
+                "> `!skade [lagnavn]` — vis skader for et spesifikt lag\n"
+                "> `!skade [antall]` — vis siste N skademeldinger"
+            )
+            return
+
+        arg = arg.strip()
+
+        if arg.isdigit():
+            # Show last N injury-type entries from the news log
+            n = min(int(arg), 100)
+            entries = await asyncio.to_thread(news_log.get_recent, n, "news")
+            if not entries:
+                await ctx.send("Ingen skademeldinger logget ennå.")
+                return
+            lines = [f"<t:{e['ts']}:d> {e['text']}" for e in entries]
+            message = f"🏥 **Siste {len(lines)} skademeldinger:**\n" + "\n".join(lines)
+            await ctx_send(ctx, message)
+            return
+
+        # Team lookup — query current bootstrap data
+        bootstrap = await asyncio.to_thread(get_bootstrap_data)
+        query = arg.lower()
+        matched_team = next(
+            (t for t in bootstrap.get("teams", []) if query in t["name"].lower()),
+            None,
+        )
+        if not matched_team:
+            await ctx.send(f"🚫 Fant ikke lag som inneholder **{arg}**.")
+            return
+
+        injured = [
+            p for p in bootstrap.get("elements", [])
+            if p["team"] == matched_team["id"] and p.get("news")
+        ]
+
+        if not injured:
+            await ctx.send(f"✅ Ingen skade/forfall-meldinger for **{matched_team['name']}**.")
+            return
+
+        lines = []
+        for p in injured:
+            name = f"{p['first_name']} {p['second_name']}"
+            emoji = STATUS_EMOJI.get(p.get("status", ""), "❓")
+            chance = p.get("chance_of_playing_next_round")
+            chance_str = f" ({chance}%)" if chance is not None else ""
+            lines.append(f"> {emoji} **{name}**{chance_str}: {p['news']}")
+
+        message = f"🏥 **Skader/Forfall – {matched_team['name']}:**\n" + "\n".join(lines)
+        await ctx_send(ctx, message)
+
+    except Exception as e:
+        await ctx.send(f"⚠️ Noe gikk galt: {e}")
+
+
+# ---------------------------------------------------------------------------
 
 bot.run(TOKEN)

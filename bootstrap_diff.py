@@ -13,11 +13,6 @@ load_dotenv()
 BOOTSTRAP_URL = os.getenv("BASE_API_URL") + "bootstrap-static/"
 PREVIOUS_FILE = "bootstrap_previous.json"
 
-# Hent servers.json for direktekjøring
-with open("servers.json", "r") as f:
-    SERVER_CONFIGS = json.load(f)
-
-
 def fetch_bootstrap_data():
     print("📡 Laster ned bootstrap-static fra API")
     try:
@@ -87,6 +82,8 @@ def main():
 
 
 if __name__ == "__main__":
+    with open("servers.json", "r") as f:
+        SERVER_CONFIGS = json.load(f)
     try:
         result = main()
         for server in SERVER_CONFIGS:
