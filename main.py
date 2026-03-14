@@ -18,6 +18,7 @@ if not BASE_API_URL:
 API_URL = BASE_API_URL + "events/"
 BOOTSTRAP_URL = BASE_API_URL + "bootstrap-static/"
 DREAM_TEAM_URL = BASE_API_URL + "dream-team/"
+LEAGUES_URL = BASE_API_URL + "leagues-classic/"
 CACHE_FILE = "cache.json"
 BOOTSTRAP_FILE = "bootstrap_cache.json"
 CACHE_TTL_SECONDS = 320 * 60
@@ -172,6 +173,12 @@ def fetch_all_events() -> list:
     except Exception as e:
         print(f"⚠️ Feil i fetch_all_events(): {e}")
         return []
+
+def fetch_league_standings(league_id: int) -> dict:
+    """Return standings for a classic league. Raises on failure."""
+    r = requests.get(LEAGUES_URL + str(league_id) + "/standings/")
+    r.raise_for_status()
+    return r.json()
 
 def post_to_discord(content):
     if not DISCORD_WEBHOOK_URL:

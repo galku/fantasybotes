@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from main import (
     fetch_event, fetch_all_events, fetch_upcoming_event,
     get_name_lookup, format_message, get_bootstrap_data,
+    fetch_league_standings,
 )
 from bootstrap_diff import compare_players, fetch_bootstrap_data, load_previous_data
 from cache_utils import save_cache
@@ -291,6 +292,26 @@ async def round_completed_check():
         full_message = f"📊 **Runde {event['id']} er ferdig!**\n\n{message_body}"
 
         await news_to_servers(full_message)
+
+        # Post league leader for each server
+        for server in SERVERS:
+            league_id = server.get("league_id")
+            channel_id = server.get("news_channel_id")
+            if not league_id or not channel_id:
+                continue
+            try:
+                data = await asyncio.to_thread(fetch_league_standings, league_id)
+                league_name = data.get("league", {}).get("name", "ligaen")
+                results = data.get("standings", {}).get("results", [])
+                leader = next((r for r in results if r.get("rank") == 1), None)
+                if leader:
+                    await send_to_channel(
+                        channel_id,
+                        f"🏆 Leder av **{league_name}** er **{leader['entry_name']}** ({leader['total']} poeng)"
+                    )
+            except Exception as e:
+                await log_to_servers(f"⚠️ Kunne ikke hente ligaleder for liga {league_id}: {e}")
+
         await asyncio.to_thread(mark_as_posted, tracker_key)
 
     except Exception as e:
@@ -544,6 +565,46 @@ async def paminnelse_cmd(ctx, arg: str = None):
 
 
 # ---------------------------------------------------------------------------
+# Command: !rangering
+# Lists all entries in the server's league sorted by rank.
+# ---------------------------------------------------------------------------
+
+@bot.command(name="rangering")
+async def rangering_cmd(ctx):
+    try:
+        await log_command(ctx, "!rangering")
+        server = next((s for s in SERVERS if s["guild_id"] == ctx.guild.id), None)
+        league_id = server.get("league_id") if server else None
+        if not league_id:
+            await ctx.send("🚫 Ingen liga konfigurert for denne serveren.")
+            return
+
+        data = await asyncio.to_thread(fetch_league_standings, league_id)
+        league_name = data.get("league", {}).get("name", "Ligaen")
+        results = data.get("standings", {}).get("results", [])
+
+        if not results:
+            await ctx.send("🚫 Ingen resultater funnet.")
+            return
+
+        MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
+        lines = []
+        for r in results:
+            rank = r.get("rank", "?")
+            prefix = MEDALS.get(rank, f"{rank}.")
+            entry = r.get("entry_name", "Ukjent")
+            total = r.get("total", 0)
+            last_rank = r.get("last_rank", "?")
+            lines.append(f"{prefix} **{entry}** – {total} poeng *(sist uke: {last_rank}. plass)*")
+
+        header = f"🏆 **Rangering – {league_name}:** (bedt om av {ctx.author.mention})\n"
+        await ctx_send(ctx, header + "\n".join(lines))
+
+    except Exception as e:
+        await log_error(ctx, f"🛑 Feil i !rangering: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Command: !sync  (log channel only)
 # Triggers news_update immediately — fetches fresh bootstrap data and posts
 # any changes to the news channels.
@@ -589,6 +650,7 @@ async def hjelp_cmd(ctx):
             "> `!deadline [runde]` — Rundeinfo for aktiv eller angitt runde. Eks: `!deadline` · `!deadline 5`\n"
             "> `!nyheter [antall]` — Aktive skader og nyheter akkurat nå. Eks: `!nyheter` · `!nyheter 50`\n"
             "> `!skade [lag|antall]` — Skader per lag, eller siste N meldinger. Eks: `!skade Rosenborg` · `!skade 30`\n"
+            "> `!rangering` — Vis fullstendig ligatabell med poeng og forrige ukes rangering.\n"
             "> `!påminnelse [log]` — Sender deadline-påminnelse til nyhetskanal. Legg til `log` for å teste hit istedet.\n"
             "> `!sync` — Henter fersk Fantasy-data og poster eventuelle endringer til nyhetskanal nå.\n"
             "> `!update` — Git pull + omstart. *(kun admin)*\n"
