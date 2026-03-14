@@ -2,6 +2,7 @@ import os
 import json
 import time
 import asyncio
+import subprocess
 import discord
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
@@ -20,6 +21,7 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 NEWS_INTERVAL_MINUTES = int(os.getenv("NEWS_INTERVAL_MINUTES", "30"))
 DEADLINE_CHECK_INTERVAL = 15  # minutes
+ADMIN_USERNAMES = set(os.getenv("ADMIN_USERNAMES", "galku").split(","))
 
 with open("servers.json") as f:
     SERVERS = json.load(f)
@@ -428,6 +430,83 @@ async def skade_cmd(ctx, *, arg: str = None):
 
     except Exception as e:
         await log_error(ctx, f"🛑 Feil i !skade: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Command: !update  (admin only — galku or ADMIN_USERNAMES env var)
+# Pulls latest code from git and restarts the bot via systemd.
+# Message is logged before restart since the process is killed by systemd.
+# ---------------------------------------------------------------------------
+
+@bot.command(name="update")
+async def update_cmd(ctx):
+    if ctx.author.name not in ADMIN_USERNAMES:
+        await log_error(ctx, f"🚫 {ctx.author.mention} har ikke tilgang til `!update`.")
+        return
+
+    await log_command(ctx, "!update")
+    server = next((s for s in SERVERS if s["guild_id"] == ctx.guild.id), None)
+    log_channel_id = server.get("log_channel_id") if server else None
+
+    async def run_update():
+        if log_channel_id:
+            await send_to_channel(log_channel_id, "🔄 Henter siste kode fra GitHub...")
+
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["git", "-C", "/home/rene_raen/fantasyesbot", "pull"],
+            capture_output=True, text=True
+        )
+        output = result.stdout.strip() or result.stderr.strip()
+
+        if log_channel_id:
+            await send_to_channel(log_channel_id, f"📦 Git:\n```\n{output}\n```\nStarter på nytt...")
+
+        await asyncio.to_thread(
+            subprocess.run,
+            ["systemctl", "--user", "restart", "fantasybot"]
+        )
+
+    asyncio.create_task(run_update())
+
+
+# ---------------------------------------------------------------------------
+# Command: !påminnelse  (log channel only)
+# Sends the deadline reminder to all news channels, same as the automated
+# 1-hour reminder. Restricted to the log channel to avoid accidental use.
+# ---------------------------------------------------------------------------
+
+@bot.command(name="påminnelse")
+async def paminnelse_cmd(ctx):
+    try:
+        server = next((s for s in SERVERS if s["guild_id"] == ctx.guild.id), None)
+        if not server or ctx.channel.id != server.get("log_channel_id"):
+            await log_error(ctx, "⚠️ `!påminnelse` kan kun kjøres fra log-kanalen.")
+            return
+
+        await log_command(ctx, "!påminnelse")
+
+        event = await asyncio.to_thread(fetch_upcoming_event)
+        if not event:
+            await send_to_channel(server["log_channel_id"], "🚫 Ingen kommende runde funnet.")
+            return
+
+        name_lookup = await asyncio.to_thread(get_name_lookup)
+        message_body = await asyncio.to_thread(format_message, event, name_lookup)
+
+        for s in SERVERS:
+            role_id = s.get("mention_role_id")
+            mention = f"<@&{role_id}>\n" if role_id else ""
+            full_message = (
+                f"{mention}⏰ **1 time til deadline for Runde {event['id']}!**\n\n"
+                f"{message_body}"
+            )
+            channel_id = s.get("news_channel_id")
+            if channel_id:
+                await send_to_channel(channel_id, full_message)
+
+    except Exception as e:
+        await log_error(ctx, f"🛑 Feil i !påminnelse: {e}")
 
 
 # ---------------------------------------------------------------------------
