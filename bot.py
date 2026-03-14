@@ -663,12 +663,12 @@ async def build_picks_message(entry_id: int, entry_name: str, requester_mention:
 # Command: !claimetlag <lagnavn eller entry_id>
 # ---------------------------------------------------------------------------
 
-@bot.command(name="claimetlag")
-async def claimetlag_cmd(ctx, *, arg: str = None):
+@bot.command(name="hevdlag", aliases=["claimetlag"])
+async def hevdlag_cmd(ctx, *, arg: str = None):
     try:
-        await log_command(ctx, f"!claimetlag {arg or ''}".strip())
+        await log_command(ctx, f"!hevdlag {arg or ''}".strip())
         if not arg:
-            await ctx.send("Bruk: `!claimetlag <lagnavn>` eller `!claimetlag <entry_id>`")
+            await ctx.send("Bruk: `!hevdlag <lagnavn>` eller `!hevdlag <entry_id>`")
             return
 
         server = next((s for s in SERVERS if s["guild_id"] == ctx.guild.id), None)
@@ -710,7 +710,7 @@ async def claimetlag_cmd(ctx, *, arg: str = None):
 
         existing = team_claims.find_by_entry_id(entry_id)
         if existing and existing.get("discord_name") != ctx.author.name:
-            await ctx.send(f"🚫 **{entry_name}** er allerede claimet av **{existing['discord_name']}**.")
+            await ctx.send(f"🚫 **{entry_name}** er allerede koblet til **{existing['discord_name']}**.")
             return
 
         team_claims.set_claim(ctx.author.id, entry_id, entry_name, ctx.author.name)
@@ -748,22 +748,28 @@ async def lagetmitt_cmd(ctx):
 async def lag_cmd(ctx, *, arg: str = None):
     try:
         await log_command(ctx, f"!lag {arg or ''}".strip())
+
+        # No argument — show the caller's own team
         if not arg:
-            await ctx.send("Bruk: `!lag @bruker` eller `!lag brukernavn`")
+            claim = team_claims.get_claim(ctx.author.id)
+            if not claim:
+                await ctx.send("🚫 Du har ikke koblet deg til et lag ennå. Bruk `!hevdlag <lagnavn>` for å gjøre det.")
+                return
+            msg = await build_picks_message(claim["entry_id"], claim["entry_name"], ctx.author.mention)
+            await ctx_send(ctx, msg)
             return
 
         claim = None
-        # Check if it's a mention
         if ctx.message.mentions:
             target = ctx.message.mentions[0]
             claim = team_claims.get_claim(target.id)
             if not claim:
-                await ctx.send(f"🚫 {target.display_name} har ikke claimet et lag ennå.")
+                await ctx.send(f"🚫 {target.display_name} har ikke koblet seg til et lag ennå.")
                 return
         else:
             claim = team_claims.find_by_discord_name(arg.strip())
             if not claim:
-                await ctx.send(f"🚫 Fant ingen claimet lag for brukernavn **{arg}**.")
+                await ctx.send(f"🚫 Fant ingen kobling for brukernavn **{arg}**.")
                 return
 
         msg = await build_picks_message(claim["entry_id"], claim["entry_name"], ctx.author.mention)
@@ -884,10 +890,10 @@ async def hjelp_cmd(ctx):
             "> `!nyheter [antall]` — Aktive skader og nyheter akkurat nå. Eks: `!nyheter` · `!nyheter 50`\n"
             "> `!skade [lag|antall]` — Skader per lag, eller siste N meldinger. Eks: `!skade Rosenborg` · `!skade 30`\n"
             "> `!rangering` — Vis fullstendig ligatabell med poeng og forrige ukes rangering.\n"
-            "> `!claimetlag <lagnavn>` — Knytt deg selv til ditt Fantasy-lag. Eks: `!claimetlag Bakromshelvette`\n"
+            "> `!hevdlag <lagnavn>` — Knytt deg selv til ditt Fantasy-lag. Eks: `!hevdlag Bakromshelvette`\n"
             "> `!lagkobling @bruker <lagnavn>` — Koble en bruker til et lag *(kun log-kanal)*. Eks: `!lagkobling @madcow Bakromshelvette`\n"
-            "> `!lagetmitt` — Vis ditt claimede lags nåværende picks.\n"
-            "> `!lag [@mention|brukernavn]` — Vis en annen brukers claimede lag. Eks: `!lag @madcow` · `!lag madcow`\n"
+            "> `!lagetmitt` — Vis ditt lags nåværende picks.\n"
+            "> `!lag [@mention|brukernavn]` — Vis et lag. Uten argument: ditt eget. Eks: `!lag @madcow` · `!lag madcow`\n"
             "> `!påminnelse [log]` — Sender deadline-påminnelse til nyhetskanal. Legg til `log` for å teste hit istedet.\n"
             "> `!sync` — Henter fersk Fantasy-data og poster eventuelle endringer til nyhetskanal nå.\n"
             "> `!update` — Git pull + omstart. *(kun admin)*\n"
