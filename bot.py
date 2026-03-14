@@ -776,11 +776,15 @@ async def build_picks_message(entry_id: int, entry_name: str, requester_mention:
             return "❌ Ingen aktiv eller ferdig runde funnet — ingen picks tilgjengelig ennå."
         event = max(finished, key=lambda e: e["id"])
 
-    picks_data, live_data, bootstrap = await asyncio.gather(
+    picks_data, live_result, bootstrap = await asyncio.gather(
         asyncio.to_thread(fetch_entry_picks, entry_id, event["id"]),
         asyncio.to_thread(fetch_live_event, event["id"]),
         asyncio.to_thread(get_bootstrap_data),
+        return_exceptions=True,
     )
+    if isinstance(picks_data, Exception):
+        raise picks_data
+    live_data = live_result if not isinstance(live_result, Exception) else {}
 
     picks = picks_data.get("picks", [])
     if not picks:
