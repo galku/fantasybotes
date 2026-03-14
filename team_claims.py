@@ -45,3 +45,8 @@ def find_by_entry_id(entry_id: int) -> dict | None:
         if claim.get("entry_id") == entry_id:
             return claim
     return None
+
+
+def entry_id_to_discord_name() -> dict:
+    """Return {entry_id: discord_name} for all claims."""
+    return {c["entry_id"]: c["discord_name"] for c in _load().values() if "entry_id" in c}

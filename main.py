@@ -194,6 +194,12 @@ def fetch_league_standings(league_id: int) -> dict:
     data.setdefault("standings", {})["results"] = all_results
     return data
 
+def fetch_live_event(event_id: int) -> dict:
+    """Return live points for all elements in a gameweek (single API call)."""
+    r = requests.get(API_URL + str(event_id) + "/live/")
+    r.raise_for_status()
+    return r.json()
+
 def fetch_entry_picks(entry_id: int, event_id: int) -> dict:
     """Return picks for a team in a specific gameweek. Raises on failure."""
     r = requests.get(ENTRY_URL + str(entry_id) + f"/event/{event_id}/picks/")

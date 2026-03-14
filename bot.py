@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from main import (
     fetch_event, fetch_all_events, fetch_upcoming_event,
     get_name_lookup, format_message, get_bootstrap_data,
-    fetch_league_standings, fetch_entry_picks,
+    fetch_league_standings, fetch_entry_picks, fetch_live_event,
 )
 import team_claims
 from bootstrap_diff import compare_players, fetch_bootstrap_data, load_previous_data
@@ -589,6 +589,7 @@ async def rangering_cmd(ctx):
             return
 
         MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
+        discord_map = team_claims.entry_id_to_discord_name()
         lines = []
         for r in results:
             rank = r.get("rank", "?")
@@ -596,7 +597,9 @@ async def rangering_cmd(ctx):
             entry = r.get("entry_name", "Ukjent")
             total = r.get("total", 0)
             last_rank = r.get("last_rank", "?")
-            lines.append(f"{prefix} **{entry}** – {total} poeng *(sist uke: {last_rank}. plass)*")
+            discord_name = discord_map.get(r.get("entry"))
+            discord_str = f" ({discord_name})" if discord_name else ""
+            lines.append(f"{prefix} **{entry}**{discord_str} – {total} poeng *(sist uke: {last_rank}. plass)*")
 
         header = f"🏆 **Rangering – {league_name}:** (bedt om av {ctx.author.mention})\n"
         await ctx_send(ctx, header + "\n".join(lines))
@@ -623,7 +626,12 @@ async def build_picks_message(entry_id: int, entry_name: str, requester_mention:
             return "❌ Ingen aktiv eller ferdig runde funnet — ingen picks tilgjengelig ennå."
         event = max(finished, key=lambda e: e["id"])
 
-    picks_data = await asyncio.to_thread(fetch_entry_picks, entry_id, event["id"])
+    picks_data, live_data, bootstrap = await asyncio.gather(
+        asyncio.to_thread(fetch_entry_picks, entry_id, event["id"]),
+        asyncio.to_thread(fetch_live_event, event["id"]),
+        asyncio.to_thread(get_bootstrap_data),
+    )
+
     picks = picks_data.get("picks", [])
     if not picks:
         return f"❌ Ingen picks funnet for **{entry_name}** i runde {event['id']}."
@@ -632,9 +640,10 @@ async def build_picks_message(entry_id: int, entry_name: str, requester_mention:
     event_pts = hist.get("points", "?")
     total_pts = hist.get("total_points", "?")
 
-    bootstrap = await asyncio.to_thread(get_bootstrap_data)
     player_map = {p["id"]: p for p in bootstrap.get("elements", [])}
     team_map = {t["id"]: t["name"] for t in bootstrap.get("teams", [])}
+    live_map = {e["id"]: e.get("stats", {}).get("total_points", 0)
+                for e in live_data.get("elements", [])}
 
     def fmt_player(p):
         player = player_map.get(p["element"], {})
@@ -642,7 +651,10 @@ async def build_picks_message(entry_id: int, entry_name: str, requester_mention:
         team = team_map.get(player.get("team", 0), "?")
         pos_emoji = TYPE_EMOJI.get(player.get("element_type", 0), "❔")
         captain = " 👑" if p.get("is_captain") else (" 🥈" if p.get("is_vice_captain") else "")
-        return f"> {pos_emoji} {name} ({team}){captain}"
+        raw_pts = live_map.get(p["element"], 0)
+        multiplier = p.get("multiplier", 1)
+        pts_str = f" – {raw_pts * multiplier}p" if multiplier > 1 else f" – {raw_pts}p"
+        return f"> {pos_emoji} {name} ({team}){captain}{pts_str}"
 
     starters = sorted([p for p in picks if p["position"] <= 11], key=lambda p: p["position"])
     bench = sorted([p for p in picks if p["position"] > 11], key=lambda p: p["position"])
