@@ -175,10 +175,23 @@ def fetch_all_events() -> list:
         return []
 
 def fetch_league_standings(league_id: int) -> dict:
-    """Return standings for a classic league. Raises on failure."""
-    r = requests.get(LEAGUES_URL + str(league_id) + "/standings/")
+    """Return standings for a classic league, fetching all pages."""
+    url = LEAGUES_URL + str(league_id) + "/standings/"
+    r = requests.get(url)
     r.raise_for_status()
-    return r.json()
+    data = r.json()
+
+    all_results = list(data.get("standings", {}).get("results", []))
+    page = 1
+    while data.get("standings", {}).get("has_next", False):
+        page += 1
+        r = requests.get(url, params={"page_standings": page})
+        r.raise_for_status()
+        data = r.json()
+        all_results.extend(data.get("standings", {}).get("results", []))
+
+    data.setdefault("standings", {})["results"] = all_results
+    return data
 
 def post_to_discord(content):
     if not DISCORD_WEBHOOK_URL:
