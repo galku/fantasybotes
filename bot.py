@@ -769,6 +769,65 @@ async def lag_cmd(ctx, *, arg: str = None):
 
 
 # ---------------------------------------------------------------------------
+# Command: !lagkobling  (log channel only — admin use)
+# Links a Discord user to a team without requiring them to run !claimetlag.
+# Usage: !lagkobling @bruker <lagnavn eller entry_id>
+# ---------------------------------------------------------------------------
+
+@bot.command(name="lagkobling")
+async def lagkobling_cmd(ctx, member: discord.Member, *, entry_name_or_id: str):
+    try:
+        server = next((s for s in SERVERS if s["guild_id"] == ctx.guild.id), None)
+        if not server or ctx.channel.id != server.get("log_channel_id"):
+            await log_error(ctx, "⚠️ `!lagkobling` kan kun kjøres fra log-kanalen.")
+            return
+
+        await log_command(ctx, f"!lagkobling {member} {entry_name_or_id}")
+        league_id = server.get("league_id")
+
+        entry_id = None
+        entry_name = None
+
+        if entry_name_or_id.strip().isdigit():
+            entry_id = int(entry_name_or_id.strip())
+            if league_id:
+                data = await asyncio.to_thread(fetch_league_standings, league_id)
+                match = next(
+                    (r for r in data.get("standings", {}).get("results", [])
+                     if r.get("entry") == entry_id),
+                    None,
+                )
+                entry_name = match["entry_name"] if match else f"Lag #{entry_id}"
+            else:
+                entry_name = f"Lag #{entry_id}"
+        else:
+            if not league_id:
+                await send_to_channel(server["log_channel_id"], "🚫 Ingen liga konfigurert for denne serveren.")
+                return
+            data = await asyncio.to_thread(fetch_league_standings, league_id)
+            query = entry_name_or_id.strip().lower()
+            match = next(
+                (r for r in data.get("standings", {}).get("results", [])
+                 if query in r.get("entry_name", "").lower()),
+                None,
+            )
+            if not match:
+                await send_to_channel(server["log_channel_id"], f"🚫 Fant ikke lag som inneholder **{entry_name_or_id}** i ligaen.")
+                return
+            entry_id = match["entry"]
+            entry_name = match["entry_name"]
+
+        team_claims.set_claim(member.id, entry_id, entry_name, member.name)
+        await send_to_channel(
+            server["log_channel_id"],
+            f"✅ {member.mention} er koblet til **{entry_name}** (entry_id: {entry_id})"
+        )
+
+    except Exception as e:
+        await log_error(ctx, f"🛑 Feil i !lagkobling: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Command: !sync  (log channel only)
 # Triggers news_update immediately — fetches fresh bootstrap data and posts
 # any changes to the news channels.
@@ -815,7 +874,8 @@ async def hjelp_cmd(ctx):
             "> `!nyheter [antall]` — Aktive skader og nyheter akkurat nå. Eks: `!nyheter` · `!nyheter 50`\n"
             "> `!skade [lag|antall]` — Skader per lag, eller siste N meldinger. Eks: `!skade Rosenborg` · `!skade 30`\n"
             "> `!rangering` — Vis fullstendig ligatabell med poeng og forrige ukes rangering.\n"
-            "> `!claimetlag <lagnavn>` — Knytt Discord-brukeren din til ditt Fantasy-lag. Eks: `!claimetlag Bakromshelvette`\n"
+            "> `!claimetlag <lagnavn>` — Knytt deg selv til ditt Fantasy-lag. Eks: `!claimetlag Bakromshelvette`\n"
+            "> `!lagkobling @bruker <lagnavn>` — Koble en bruker til et lag *(kun log-kanal)*. Eks: `!lagkobling @madcow Bakromshelvette`\n"
             "> `!lagetmitt` — Vis ditt claimede lags nåværende picks.\n"
             "> `!lag [@mention|brukernavn]` — Vis en annen brukers claimede lag. Eks: `!lag @madcow` · `!lag madcow`\n"
             "> `!påminnelse [log]` — Sender deadline-påminnelse til nyhetskanal. Legg til `log` for å teste hit istedet.\n"
