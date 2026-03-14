@@ -17,7 +17,15 @@ ENV PYTHONUNBUFFERED=1
 #   DISCORD_BOT_TOKEN     - Discord bot token
 #   BASE_API_URL          - FPL API base URL
 #   GCS_BUCKET            - GCS bucket name for persistent state
-#   NEWS_INTERVAL_MINUTES - (optional) news check interval, default 30
+#
+# Optional — intervals and cache TTLs (all in minutes):
+#   NEWS_INTERVAL_MINUTES          - news check interval, default 30
+#   BOOTSTRAP_CACHE_TTL_MINUTES    - bootstrap-static cache, default 180
+#   EVENTS_CACHE_TTL_MINUTES       - events list cache, default 320
+#   STANDINGS_CACHE_TTL_MINUTES    - league standings cache, default 120
+#   LIVE_CACHE_TTL_MINUTES         - live event points cache, default 120
+#   PICKS_CACHE_TTL_MINUTES        - entry picks cache per GW, default 10080 (7 days)
+#   DREAM_TEAM_CACHE_TTL_MINUTES   - dream team cache per GW, default 10080 (7 days)
 #
 # This bot holds a persistent WebSocket connection to Discord.
 # Always set --min-instances=1 and --max-instances=1:
