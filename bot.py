@@ -335,38 +335,6 @@ async def deadline_cmd(ctx, runde_nr: str = None):
         await log_error(ctx, f"🛑 Feil i !deadline: {e}")
 
 
-# ---------------------------------------------------------------------------
-# Command: !testdeadline
-# Fires the deadline reminder immediately for the current round, bypassing
-# the time window check. Does NOT mark it as posted, so the real reminder
-# still fires when the time comes.
-# ---------------------------------------------------------------------------
-
-@bot.command(name="testdeadline")
-async def testdeadline_cmd(ctx):
-    try:
-        await log_command(ctx, "!testdeadline")
-        event = await asyncio.to_thread(fetch_upcoming_event)
-        if not event:
-            await ctx.send("🚫 Ingen kommende runde funnet.")
-            return
-
-        name_lookup = await asyncio.to_thread(get_name_lookup)
-        message_body = await asyncio.to_thread(format_message, event, name_lookup)
-
-        for server in SERVERS:
-            role_id = server.get("mention_role_id")
-            mention = f"<@&{role_id}>\n" if role_id else ""
-            full_message = (
-                f"{mention}⏰ **1 time til deadline for Runde {event['id']}!**\n\n"
-                f"{message_body}"
-            )
-            channel_id = server.get("news_channel_id")
-            if channel_id:
-                await send_to_channel(channel_id, full_message)
-
-    except Exception as e:
-        await log_error(ctx, f"🛑 Feil i !testdeadline: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -576,6 +544,29 @@ async def paminnelse_cmd(ctx, arg: str = None):
 
 
 # ---------------------------------------------------------------------------
+# Command: !sync  (log channel only)
+# Triggers news_update immediately — fetches fresh bootstrap data and posts
+# any changes to the news channels.
+# ---------------------------------------------------------------------------
+
+@bot.command(name="sync")
+async def sync_cmd(ctx):
+    try:
+        server = next((s for s in SERVERS if s["guild_id"] == ctx.guild.id), None)
+        if not server or ctx.channel.id != server.get("log_channel_id"):
+            await log_error(ctx, "⚠️ `!sync` kan kun kjøres fra log-kanalen.")
+            return
+
+        await log_command(ctx, "!sync")
+        await send_to_channel(server["log_channel_id"], "🔄 Synkroniserer Fantasy-data...")
+        await news_update()
+        await send_to_channel(server["log_channel_id"], "✅ Sync ferdig. Eventuelle endringer er postet til nyhetskanaler.")
+
+    except Exception as e:
+        await log_error(ctx, f"🛑 Feil i !sync: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Command: !hjelp  (log channel only)
 # Lists all commands with descriptions and examples.
 # ---------------------------------------------------------------------------
@@ -595,23 +586,13 @@ async def hjelp_cmd(ctx):
             "> Driftet av **madcow** | Misbruk? `cowness+misbruk@gmail.com`\n"
             "\n"
             "📋 **Kommandoer:**\n"
-            "> `!deadline [runde]` — Viser rundeinfo (deadline, kaptein, toppspiller osv.)\n"
-            ">   Eks: `!deadline` (aktiv runde) · `!deadline 5` (runde 5)\n"
-            ">\n"
-            "> `!nyheter [antall]` — Siste Fantasy-nyheter og prisendringer fra loggen\n"
-            ">   Eks: `!nyheter` (20 siste) · `!nyheter 50`\n"
-            ">\n"
-            "> `!skade [lag|antall]` — Skader og forfall\n"
-            ">   Eks: `!skade Rosenborg` · `!skade 30` (siste 30 skademeldinger)\n"
-            ">\n"
-            "> `!påminnelse [log]` — Sender deadline-påminnelse til nyhetskanaler *(kun fra log-kanal)*\n"
-            ">   Legg til `log` for å sende til log-kanalen istedet: `!påminnelse log`\n"
-            ">\n"
-            "> `!testdeadline` — Tester deadline-påminnelse til nyhetskanaler uten å markere som sendt\n"
-            ">\n"
-            "> `!update` — Henter siste kode fra GitHub og starter boten på nytt *(kun admin)*\n"
-            ">\n"
-            "> `!hjelp` — Denne meldingen *(kun fra log-kanal)*\n"
+            "> `!deadline [runde]` — Rundeinfo for aktiv eller angitt runde. Eks: `!deadline` · `!deadline 5`\n"
+            "> `!nyheter [antall]` — Aktive skader og nyheter akkurat nå. Eks: `!nyheter` · `!nyheter 50`\n"
+            "> `!skade [lag|antall]` — Skader per lag, eller siste N meldinger. Eks: `!skade Rosenborg` · `!skade 30`\n"
+            "> `!påminnelse [log]` — Sender deadline-påminnelse til nyhetskanal. Legg til `log` for å teste hit istedet.\n"
+            "> `!sync` — Henter fersk Fantasy-data og poster eventuelle endringer til nyhetskanal nå.\n"
+            "> `!update` — Git pull + omstart. *(kun admin)*\n"
+            "> `!hjelp` — Denne meldingen. *(kun fra log-kanal)*\n"
         )
         await send_to_channel(server["log_channel_id"], msg)
 
