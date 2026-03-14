@@ -131,7 +131,7 @@ async def on_ready():
     round_completed_check.start()
 
     await log_to_servers(
-        f"🤖 **Fantasybot er klar!** Nyheter sjekkes hvert {NEWS_INTERVAL_MINUTES}. minutt."
+        f"🤖 **Fantasybot er klar!** PID: `{os.getpid()}` — Nyheter sjekkes hvert {NEWS_INTERVAL_MINUTES}. minutt."
     )
 
 
