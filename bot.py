@@ -609,6 +609,156 @@ async def rangering_cmd(ctx):
 
 
 # ---------------------------------------------------------------------------
+# Command: !flause
+# ---------------------------------------------------------------------------
+
+async def _safe_picks(entry_id: int, event_id: int):
+    """Fetch picks silently — returns None on any error."""
+    try:
+        return await asyncio.to_thread(fetch_entry_picks, entry_id, event_id)
+    except Exception:
+        return None
+
+
+def _bench_losses(curr_data: dict, live_map: dict) -> list[tuple]:
+    """Return (bench_elem, starter_elem, pts_diff) for each bench player scoring more than a starter."""
+    picks = curr_data.get("picks", [])
+    starters = sorted(
+        [(p["element"], live_map.get(p["element"], 0)) for p in picks if p["position"] <= 11],
+        key=lambda x: x[1],           # ascending — worst starters first
+    )
+    bench = sorted(
+        [(p["element"], live_map.get(p["element"], 0)) for p in picks if p["position"] > 11],
+        key=lambda x: x[1], reverse=True,  # descending — best bench first
+    )
+    losses, used = [], set()
+    for b_elem, b_pts in bench:
+        for s_elem, s_pts in starters:
+            if s_elem in used:
+                continue
+            if b_pts > s_pts:
+                losses.append((b_elem, s_elem, b_pts - s_pts))
+                used.add(s_elem)
+                break
+    return losses
+
+
+@bot.command(name="flause")
+async def flause_cmd(ctx):
+    try:
+        await log_command(ctx, "!flause")
+
+        server = next((s for s in SERVERS if s["guild_id"] == ctx.guild.id), None)
+        league_id = server.get("league_id") if server else None
+        if not league_id:
+            await ctx.send("🚫 Ingen liga konfigurert for denne serveren.")
+            return
+
+        # Resolve current event (or latest finished)
+        event = await asyncio.to_thread(fetch_event)
+        if not event:
+            events = await asyncio.to_thread(fetch_all_events)
+            finished = [e for e in events if e.get("finished")]
+            if not finished:
+                await ctx.send("❌ Ingen runde tilgjengelig ennå.")
+                return
+            event = max(finished, key=lambda e: e["id"])
+
+        event_id = event["id"]
+        prev_event_id = event_id - 1
+
+        # Parallel: standings + live data + bootstrap
+        standings_data, live_data, bootstrap = await asyncio.gather(
+            asyncio.to_thread(fetch_league_standings, league_id),
+            asyncio.to_thread(fetch_live_event, event_id),
+            asyncio.to_thread(get_bootstrap_data),
+        )
+
+        results = standings_data.get("standings", {}).get("results", [])
+        league_name = standings_data.get("league", {}).get("name", "Ligaen")
+        live_map = {e["id"]: e.get("stats", {}).get("total_points", 0)
+                    for e in live_data.get("elements", [])}
+        player_map = {p["id"]: f"{p['first_name']} {p['second_name']}"
+                      for p in bootstrap.get("elements", [])}
+        discord_map = team_claims.entry_id_to_discord_name()
+        entry_ids = [r["entry"] for r in results]
+
+        # Parallel: all current and previous picks
+        curr_list, prev_list = await asyncio.gather(
+            asyncio.gather(*[_safe_picks(eid, event_id) for eid in entry_ids]),
+            asyncio.gather(*[_safe_picks(eid, prev_event_id) for eid in entry_ids])
+            if prev_event_id > 0 else asyncio.coroutine(lambda: [None] * len(entry_ids))(),
+        )
+
+        rows = []
+        for result, curr_data, prev_data in zip(results, curr_list, prev_list):
+            entry_id = result["entry"]
+            entry_name = result.get("entry_name", "Ukjent")
+            discord_name = discord_map.get(entry_id)
+            label = f"@{discord_name}" if discord_name else entry_name
+
+            if not curr_data:
+                continue
+
+            transfer_lines, transfer_loss = [], 0
+            if prev_data:
+                prev_elems = {p["element"] for p in prev_data.get("picks", [])}
+                curr_elems = {p["element"] for p in curr_data.get("picks", [])}
+                transferred_in = curr_elems - prev_elems
+                transferred_out = prev_elems - curr_elems
+                if transferred_in or transferred_out:
+                    in_pts = sum(live_map.get(e, 0) for e in transferred_in)
+                    out_pts = sum(live_map.get(e, 0) for e in transferred_out)
+                    transfer_loss = in_pts - out_pts  # negative = bad
+                    in_names = ", ".join(
+                        f"{player_map.get(e, '?')} ({live_map.get(e, 0)}p)"
+                        for e in transferred_in
+                    )
+                    out_names = ", ".join(
+                        f"{player_map.get(e, '?')} ({live_map.get(e, 0)}p)"
+                        for e in transferred_out
+                    )
+                    transfer_lines.append(
+                        f"↔️ Inn: {in_names} | Ut: {out_names} → {transfer_loss:+d}p"
+                    )
+
+            bench_rows = _bench_losses(curr_data, live_map)
+            bench_loss = sum(d for _, _, d in bench_rows)
+            bench_lines = [
+                f"🪑 {player_map.get(b, '?')} ({live_map.get(b, 0)}p) over "
+                f"{player_map.get(s, '?')} ({live_map.get(s, 0)}p) → +{d}p misst"
+                for b, s, d in bench_rows
+            ]
+
+            total_loss = transfer_loss - bench_loss
+            if total_loss >= 0 and not bench_rows:
+                continue  # no loss — skip
+
+            rows.append((total_loss, label, entry_name, transfer_lines, bench_lines))
+
+        if not rows:
+            await ctx.send(f"🌟 Ingen flause i **{league_name}** denne runden!")
+            return
+
+        rows.sort(key=lambda x: x[0])  # worst first (most negative)
+        lines = [f"🃏 **Flause-tabellen – {league_name} – Runde {event_id}** (bedt om av {ctx.author.mention})\n"]
+        for i, (total, label, entry_name, t_lines, b_lines) in enumerate(rows, 1):
+            display = label if label.startswith("@") else f"**{label}**"
+            if label.startswith("@") and label[1:] != entry_name:
+                display += f" ({entry_name})"
+            lines.append(f"{i}. {display} — Total: {total:+d}p")
+            for tl in t_lines:
+                lines.append(f"   {tl}")
+            for bl in b_lines:
+                lines.append(f"   {bl}")
+
+        await ctx_send(ctx, "\n".join(lines))
+
+    except Exception as e:
+        await log_error(ctx, f"🛑 Feil i !flause: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Team picks helper
 # ---------------------------------------------------------------------------
 
@@ -902,6 +1052,7 @@ async def hjelp_cmd(ctx):
             "> `!nyheter [antall]` — Aktive skader og nyheter akkurat nå. Eks: `!nyheter` · `!nyheter 50`\n"
             "> `!skade [lag|antall]` — Skader per lag, eller siste N meldinger. Eks: `!skade Rosenborg` · `!skade 30`\n"
             "> `!rangering` — Vis fullstendig ligatabell med poeng og forrige ukes rangering.\n"
+            "> `!flause` — Ranger hvem som har gjort de dårligste bytter/benkbeslutninger denne runden.\n"
             "> `!hevdlag <lagnavn>` — Knytt deg selv til ditt Fantasy-lag. Eks: `!hevdlag Bakromshelvette`\n"
             "> `!lagkobling @bruker <lagnavn>` — Koble en bruker til et lag *(kun log-kanal)*. Eks: `!lagkobling @madcow Bakromshelvette`\n"
             "> `!lagetmitt` — Vis ditt lags nåværende picks.\n"
