@@ -708,6 +708,11 @@ async def claimetlag_cmd(ctx, *, arg: str = None):
             entry_id = match["entry"]
             entry_name = match["entry_name"]
 
+        existing = team_claims.find_by_entry_id(entry_id)
+        if existing and existing.get("discord_name") != ctx.author.name:
+            await ctx.send(f"🚫 **{entry_name}** er allerede claimet av **{existing['discord_name']}**.")
+            return
+
         team_claims.set_claim(ctx.author.id, entry_id, entry_name, ctx.author.name)
         await ctx.send(f"✅ **{ctx.author.display_name}** er nå koblet til laget **{entry_name}** (entry_id: {entry_id})")
 
@@ -817,10 +822,15 @@ async def lagkobling_cmd(ctx, member: discord.Member, *, entry_name_or_id: str):
             entry_id = match["entry"]
             entry_name = match["entry_name"]
 
+        existing = team_claims.find_by_entry_id(entry_id)
+        overwrite_note = ""
+        if existing and existing.get("discord_name") != member.name:
+            overwrite_note = f" *(overskrev tidligere kobling til **{existing['discord_name']}**)*"
+
         team_claims.set_claim(member.id, entry_id, entry_name, member.name)
         await send_to_channel(
             server["log_channel_id"],
-            f"✅ {member.mention} er koblet til **{entry_name}** (entry_id: {entry_id})"
+            f"✅ {member.mention} er koblet til **{entry_name}** (entry_id: {entry_id}){overwrite_note}"
         )
 
     except Exception as e:

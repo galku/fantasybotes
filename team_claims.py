@@ -37,3 +37,11 @@ def find_by_discord_name(name: str) -> dict | None:
         if claim.get("discord_name", "").lower() == name_lower:
             return claim
     return None
+
+
+def find_by_entry_id(entry_id: int) -> dict | None:
+    """Return the claim for a given entry_id if already taken, else None."""
+    for claim in _load().values():
+        if claim.get("entry_id") == entry_id:
+            return claim
+    return None
