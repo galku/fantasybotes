@@ -67,7 +67,17 @@ async def send_to_channel(channel_id: int, message: str) -> None:
         for chunk in split_message(message):
             await channel.send(chunk)
     except discord.Forbidden:
-        print(f"🚫 Mangler tilgang til kanal {channel_id}")
+        err = f"🚫 Mangler tilgang til å sende til kanal `{channel_id}` — sjekk botrollen"
+        print(err)
+        # Notify all log channels (skip the failing channel to avoid loop)
+        for server in SERVERS:
+            lc = server.get("log_channel_id")
+            if lc and lc != channel_id:
+                try:
+                    ch = bot.get_channel(lc) or await bot.fetch_channel(lc)
+                    await ch.send(err)
+                except Exception:
+                    pass
     except Exception as e:
         print(f"❌ Feil ved sending til kanal {channel_id}: {e}")
 

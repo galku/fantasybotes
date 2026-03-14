@@ -33,10 +33,11 @@ def read_json(filename: str, default=None):
             blob = bucket.blob(filename)
             if blob.exists():
                 return json.loads(blob.download_as_text())
+            # Blob doesn't exist in GCS yet — fall through to local file
         except Exception as e:
             print(f"⚠️ GCS read feilet for '{filename}': {e}")
-        return default
-    # Local fallback
+            # Fall through to local file on any GCS error
+    # Local fallback (also used when GCS blob doesn't exist yet)
     if os.path.exists(filename):
         try:
             with open(filename, encoding="utf-8") as f:
