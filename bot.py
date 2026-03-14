@@ -76,6 +76,29 @@ async def ctx_send(ctx, message: str) -> None:
         await ctx.send(chunk)
 
 
+async def log_command(ctx, command_text: str) -> None:
+    """Delete the command message and log who ran it to the server's log channel."""
+    try:
+        await ctx.message.delete()
+    except discord.NotFound:
+        pass  # already deleted (e.g. two instances running)
+    server = next((s for s in SERVERS if s["guild_id"] == ctx.guild.id), None)
+    if server and server.get("log_channel_id"):
+        await send_to_channel(
+            server["log_channel_id"],
+            f"👤 {ctx.author.mention} kjørte: `{command_text}`"
+        )
+
+
+async def log_error(ctx, message: str) -> None:
+    """Send an error message to the server's log channel, never to the news channel."""
+    server = next((s for s in SERVERS if s["guild_id"] == ctx.guild.id), None)
+    if server and server.get("log_channel_id"):
+        await send_to_channel(server["log_channel_id"], message)
+    else:
+        print(f"❌ {message}")
+
+
 async def log_to_servers(message: str) -> None:
     """Send a service/error message to every server's log channel."""
     for server in SERVERS:
@@ -254,7 +277,7 @@ async def before_round_completed_check():
 @bot.command(name="deadline")
 async def deadline_cmd(ctx, runde_nr: str = None):
     try:
-        await ctx.message.delete()
+        await log_command(ctx, f"!deadline {runde_nr or ''}".strip())
         print(f"[{ctx.message.created_at}] '!deadline' trigget av {ctx.author} i {ctx.channel} (arg: {runde_nr})")
 
         if runde_nr and not runde_nr.isdigit():
@@ -275,8 +298,7 @@ async def deadline_cmd(ctx, runde_nr: str = None):
         await ctx_send(ctx, message)
 
     except Exception as e:
-        print(f"Feil i !deadline: {e}")
-        await ctx.send(f"⚠️ Noe gikk galt: {e}")
+        await log_error(ctx, f"🛑 Feil i !deadline: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +311,7 @@ async def deadline_cmd(ctx, runde_nr: str = None):
 @bot.command(name="testdeadline")
 async def testdeadline_cmd(ctx):
     try:
-        await ctx.message.delete()
+        await log_command(ctx, "!testdeadline")
         event = await asyncio.to_thread(fetch_upcoming_event)
         if not event:
             await ctx.send("🚫 Ingen kommende runde funnet.")
@@ -310,7 +332,7 @@ async def testdeadline_cmd(ctx):
                 await send_to_channel(channel_id, full_message)
 
     except Exception as e:
-        await ctx.send(f"⚠️ Noe gikk galt: {e}")
+        await log_error(ctx, f"🛑 Feil i !testdeadline: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -321,7 +343,7 @@ async def testdeadline_cmd(ctx):
 @bot.command(name="nyheter")
 async def nyheter_cmd(ctx, antall: str = "20"):
     try:
-        await ctx.message.delete()
+        await log_command(ctx, f"!nyheter {antall}")
         if not antall.isdigit():
             await ctx.send("Bruk: `!nyheter [antall]` — f.eks. `!nyheter 50`")
             return
@@ -338,7 +360,7 @@ async def nyheter_cmd(ctx, antall: str = "20"):
         await ctx_send(ctx, message)
 
     except Exception as e:
-        await ctx.send(f"⚠️ Noe gikk galt: {e}")
+        await log_error(ctx, f"🛑 Feil i !nyheter: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +372,7 @@ async def nyheter_cmd(ctx, antall: str = "20"):
 @bot.command(name="skade")
 async def skade_cmd(ctx, *, arg: str = None):
     try:
+        await log_command(ctx, f"!skade {arg or ''}".strip())
         if arg is None:
             await ctx.send(
                 "Bruk:\n"
@@ -404,7 +427,7 @@ async def skade_cmd(ctx, *, arg: str = None):
         await ctx_send(ctx, message)
 
     except Exception as e:
-        await ctx.send(f"⚠️ Noe gikk galt: {e}")
+        await log_error(ctx, f"🛑 Feil i !skade: {e}")
 
 
 # ---------------------------------------------------------------------------
