@@ -211,17 +211,18 @@ async def news_update():
         # Log each entry to the rolling news log so !nyheter / !skade can query them
         ts = int(time.time())
         entries = [
-            {
-                "type": "news" if m.startswith("📰") else "price",
-                "text": m,
-                "ts": ts,
-            }
+            {"type": m["type"], "text": m["news_text"], "ts": ts}
             for m in messages
         ]
         await asyncio.to_thread(news_log.append_entries, entries)
 
-        news_text = "\n".join(["🔔 **Oppdateringer i Fantasy-data:**"] + messages)
+        # News content → news channels
+        news_text = "\n".join(["🔔 **Oppdateringer i Fantasy-data:**"] + [m["news_text"] for m in messages])
         await news_to_servers(news_text)
+
+        # Compact diff → log channels only
+        log_lines = [m["log_text"] for m in messages]
+        await log_to_servers("📋 **Fantasy-data oppdatert:**\n" + "\n".join(log_lines))
 
     except Exception as e:
         await log_to_servers(f"🛑 Feil i news_update: {e}")
@@ -297,7 +298,9 @@ async def deadline_cmd(ctx, runde_nr: str = None):
 
         name_lookup = await asyncio.to_thread(get_name_lookup)
         message = await asyncio.to_thread(format_message, event, name_lookup)
-        await ctx_send(ctx, message)
+        lines = message.split("\n")
+        lines[0] += f" (bedt om av {ctx.author.mention})"
+        await ctx_send(ctx, "\n".join(lines))
 
     except Exception as e:
         await log_error(ctx, f"🛑 Feil i !deadline: {e}")
@@ -358,7 +361,7 @@ async def nyheter_cmd(ctx, antall: str = "20"):
             return
 
         lines = [f"<t:{e['ts']}:d> {e['text']}" for e in entries]
-        message = f"📰 **Siste {len(lines)} Fantasy-nyheter:**\n" + "\n".join(lines)
+        message = f"📰 **Siste {len(lines)} Fantasy-nyheter:** (bedt om av {ctx.author.mention})\n" + "\n".join(lines)
         await ctx_send(ctx, message)
 
     except Exception as e:
@@ -393,7 +396,7 @@ async def skade_cmd(ctx, *, arg: str = None):
                 await ctx.send("Ingen skademeldinger logget ennå.")
                 return
             lines = [f"<t:{e['ts']}:d> {e['text']}" for e in entries]
-            message = f"🏥 **Siste {len(lines)} skademeldinger:**\n" + "\n".join(lines)
+            message = f"🏥 **Siste {len(lines)} skademeldinger:** (bedt om av {ctx.author.mention})\n" + "\n".join(lines)
             await ctx_send(ctx, message)
             return
 
@@ -425,7 +428,7 @@ async def skade_cmd(ctx, *, arg: str = None):
             chance_str = f" ({chance}%)" if chance is not None else ""
             lines.append(f"> {emoji} **{name}**{chance_str}: {p['news']}")
 
-        message = f"🏥 **Skader/Forfall – {matched_team['name']}:**\n" + "\n".join(lines)
+        message = f"🏥 **Skader/Forfall – {matched_team['name']}:** (bedt om av {ctx.author.mention})\n" + "\n".join(lines)
         await ctx_send(ctx, message)
 
     except Exception as e:
@@ -477,14 +480,16 @@ async def update_cmd(ctx):
 # ---------------------------------------------------------------------------
 
 @bot.command(name="påminnelse")
-async def paminnelse_cmd(ctx):
+async def paminnelse_cmd(ctx, arg: str = None):
+    """Send deadline reminder. Default: news channels. `!påminnelse log`: log channel only."""
     try:
         server = next((s for s in SERVERS if s["guild_id"] == ctx.guild.id), None)
         if not server or ctx.channel.id != server.get("log_channel_id"):
             await log_error(ctx, "⚠️ `!påminnelse` kan kun kjøres fra log-kanalen.")
             return
 
-        await log_command(ctx, "!påminnelse")
+        send_to_log = (arg and arg.lower() == "log")
+        await log_command(ctx, f"!påminnelse{' log' if send_to_log else ''}")
 
         event = await asyncio.to_thread(fetch_upcoming_event)
         if not event:
@@ -494,19 +499,74 @@ async def paminnelse_cmd(ctx):
         name_lookup = await asyncio.to_thread(get_name_lookup)
         message_body = await asyncio.to_thread(format_message, event, name_lookup)
 
-        for s in SERVERS:
-            role_id = s.get("mention_role_id")
+        if send_to_log:
+            # Send only to the current server's log channel
+            role_id = server.get("mention_role_id")
             mention = f"<@&{role_id}>\n" if role_id else ""
             full_message = (
                 f"{mention}⏰ **1 time til deadline for Runde {event['id']}!**\n\n"
                 f"{message_body}"
             )
-            channel_id = s.get("news_channel_id")
-            if channel_id:
-                await send_to_channel(channel_id, full_message)
+            await send_to_channel(server["log_channel_id"], full_message)
+        else:
+            # Broadcast to all servers' news channels
+            for s in SERVERS:
+                role_id = s.get("mention_role_id")
+                mention = f"<@&{role_id}>\n" if role_id else ""
+                full_message = (
+                    f"{mention}⏰ **1 time til deadline for Runde {event['id']}!**\n\n"
+                    f"{message_body}"
+                )
+                channel_id = s.get("news_channel_id")
+                if channel_id:
+                    await send_to_channel(channel_id, full_message)
 
     except Exception as e:
         await log_error(ctx, f"🛑 Feil i !påminnelse: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Command: !hjelp  (log channel only)
+# Lists all commands with descriptions and examples.
+# ---------------------------------------------------------------------------
+
+@bot.command(name="hjelp")
+async def hjelp_cmd(ctx):
+    try:
+        server = next((s for s in SERVERS if s["guild_id"] == ctx.guild.id), None)
+        if not server or ctx.channel.id != server.get("log_channel_id"):
+            await log_error(ctx, "⚠️ `!hjelp` kan kun kjøres fra log-kanalen.")
+            return
+
+        await log_command(ctx, "!hjelp")
+
+        msg = (
+            "🤖 **Fantasybot** — Eliteserien Fantasy-hjelper\n"
+            "> Driftet av **madcow** | Misbruk? `cowness+misbruk@gmail.com`\n"
+            "\n"
+            "📋 **Kommandoer:**\n"
+            "> `!deadline [runde]` — Viser rundeinfo (deadline, kaptein, toppspiller osv.)\n"
+            ">   Eks: `!deadline` (aktiv runde) · `!deadline 5` (runde 5)\n"
+            ">\n"
+            "> `!nyheter [antall]` — Siste Fantasy-nyheter og prisendringer fra loggen\n"
+            ">   Eks: `!nyheter` (20 siste) · `!nyheter 50`\n"
+            ">\n"
+            "> `!skade [lag|antall]` — Skader og forfall\n"
+            ">   Eks: `!skade Rosenborg` · `!skade 30` (siste 30 skademeldinger)\n"
+            ">\n"
+            "> `!påminnelse [log]` — Sender deadline-påminnelse til nyhetskanaler *(kun fra log-kanal)*\n"
+            ">   Legg til `log` for å sende til log-kanalen istedet: `!påminnelse log`\n"
+            ">\n"
+            "> `!testdeadline` — Tester deadline-påminnelse til nyhetskanaler uten å markere som sendt\n"
+            ">\n"
+            "> `!update` — Henter siste kode fra GitHub og starter boten på nytt *(kun admin)*\n"
+            ">\n"
+            "> `!hjelp` — Denne meldingen *(kun fra log-kanal)*\n"
+        )
+        await send_to_channel(server["log_channel_id"], msg)
+
+    except Exception as e:
+        await log_error(ctx, f"🛑 Feil i !hjelp: {e}")
 
 
 # ---------------------------------------------------------------------------

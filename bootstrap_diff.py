@@ -35,6 +35,7 @@ def load_previous_data():
 
 
 def compare_players(current, previous):
+    """Return list of dicts with keys: type, news_text, log_text."""
     output = []
     team_lookup = {team["code"]: team["name"] for team in current.get("teams", [])}
     prev_players = {p["id"]: p for p in previous.get("elements", [])} if previous else {}
@@ -54,10 +55,19 @@ def compare_players(current, previous):
             old = prev["now_cost"] / 10
             new = player["now_cost"] / 10
             emoji = "📈" if new > old else "📉"
-            output.append(f"{emoji} Prisendring for {name} ({team_name}): {old:.1f} ➝ {new:.1f}")
+            output.append({
+                "type": "price",
+                "news_text": f"{emoji} Prisendring for {name} ({team_name}): {old:.1f} ➝ {new:.1f}",
+                "log_text": f"{name} ({team_name}): pris {old:.1f} ➜ {new:.1f}",
+            })
 
         if player["news"] and player["news"] != prev.get("news", ""):
-            output.append(f"📰 Nyhet for {name} ({team_name}): {player['news']}")
+            prev_news = prev.get("news", "") or "Ingen nyheter"
+            output.append({
+                "type": "news",
+                "news_text": f"📰 Nyhet for {name} ({team_name}): {player['news']}",
+                "log_text": f"{name} ({team_name}): \"{prev_news}\" ➜ \"{player['news']}\"",
+            })
 
     return output
 
@@ -74,7 +84,7 @@ def main():
 
     if messages:
         print("✅ Endringer funnet. Sender til nyhetskanaler...")
-        news = "\n".join(["🔔 Oppdateringer i Fantasy-data:"] + messages)
+        news = "\n".join(["🔔 Oppdateringer i Fantasy-data:"] + [m["news_text"] for m in messages])
         return {"news": news}
     else:
         print("✅ Ingen relevante endringer funnet.")
