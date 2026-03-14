@@ -201,6 +201,25 @@ async def news_update():
             return
 
         previous = await asyncio.to_thread(load_previous_data)
+
+        if previous is None:
+            # First run: seed news_log with all players that currently have news
+            team_lookup = {t["code"]: t["name"] for t in current.get("teams", [])}
+            ts = int(time.time())
+            seed_entries = [
+                {
+                    "type": "news",
+                    "text": f"📰 Nyhet for {p['first_name']} {p['second_name']} ({team_lookup.get(p['team_code'], 'Ukjent lag')}): {p['news']}",
+                    "ts": ts,
+                }
+                for p in current.get("elements", []) if p.get("news")
+            ]
+            if seed_entries:
+                await asyncio.to_thread(news_log.append_entries, seed_entries)
+                print(f"🌱 Seeded news_log med {len(seed_entries)} spillere med nyheter.")
+            await asyncio.to_thread(save_cache, "bootstrap_previous.json", current)
+            return
+
         messages = compare_players(current, previous)
         await asyncio.to_thread(save_cache, "bootstrap_previous.json", current)
 
@@ -208,7 +227,7 @@ async def news_update():
             print("✅ Ingen Fantasy-endringer funnet.")
             return
 
-        # Log each entry to the rolling news log so !nyheter / !skade can query them
+        # Log each entry to the rolling news log so !skade can query history
         ts = int(time.time())
         entries = [
             {"type": m["type"], "text": m["news_text"], "ts": ts}
@@ -347,21 +366,42 @@ async def testdeadline_cmd(ctx):
 
 @bot.command(name="nyheter")
 async def nyheter_cmd(ctx, antall: str = "20"):
+    """Show current players with news from live bootstrap data, sorted by team."""
     try:
         await log_command(ctx, f"!nyheter {antall}")
         if not antall.isdigit():
             await ctx.send("Bruk: `!nyheter [antall]` — f.eks. `!nyheter 50`")
             return
 
-        n = min(int(antall), 100)
-        entries = await asyncio.to_thread(news_log.get_recent, n)
+        n = min(int(antall), 200)
+        bootstrap = await asyncio.to_thread(get_bootstrap_data)
 
-        if not entries:
-            await ctx.send("Ingen nyheter logget ennå.")
+        team_lookup = {t["id"]: t["name"] for t in bootstrap.get("teams", [])}
+        players_with_news = [
+            p for p in bootstrap.get("elements", []) if p.get("news")
+        ]
+
+        if not players_with_news:
+            await ctx.send("✅ Ingen spillere med aktive nyheter/skader akkurat nå.")
             return
 
-        lines = [f"<t:{e['ts']}:d> {e['text']}" for e in entries]
-        message = f"📰 **Siste {len(lines)} Fantasy-nyheter:** (bedt om av {ctx.author.mention})\n" + "\n".join(lines)
+        # Sort by team name, then player name
+        players_with_news.sort(key=lambda p: (team_lookup.get(p["team"], ""), p["second_name"]))
+        players_with_news = players_with_news[:n]
+
+        lines = []
+        for p in players_with_news:
+            name = f"{p['first_name']} {p['second_name']}"
+            team = team_lookup.get(p["team"], "Ukjent lag")
+            emoji = STATUS_EMOJI.get(p.get("status", ""), "❓")
+            chance = p.get("chance_of_playing_next_round")
+            chance_str = f" ({chance}%)" if chance is not None else ""
+            lines.append(f"> {emoji} **{name}** ({team}){chance_str}: {p['news']}")
+
+        message = (
+            f"📰 **Aktive nyheter/skader – {len(lines)} spillere:** (bedt om av {ctx.author.mention})\n"
+            + "\n".join(lines)
+        )
         await ctx_send(ctx, message)
 
     except Exception as e:
