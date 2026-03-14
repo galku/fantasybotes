@@ -10,8 +10,9 @@ from dotenv import load_dotenv
 from main import (
     fetch_event, fetch_all_events, fetch_upcoming_event,
     get_name_lookup, format_message, get_bootstrap_data,
-    fetch_league_standings,
+    fetch_league_standings, fetch_entry_picks,
 )
+import team_claims
 from bootstrap_diff import compare_players, fetch_bootstrap_data, load_previous_data
 from cache_utils import save_cache
 from posted_tracker import has_been_posted, mark_as_posted
@@ -605,6 +606,169 @@ async def rangering_cmd(ctx):
 
 
 # ---------------------------------------------------------------------------
+# Team picks helper
+# ---------------------------------------------------------------------------
+
+TYPE_EMOJI = {1: "🧤", 2: "🛡️", 3: "🍋", 4: "⚔️"}
+
+
+async def build_picks_message(entry_id: int, entry_name: str, requester_mention: str) -> str:
+    """Fetch and format a team's current picks. Returns a ready-to-send string."""
+    # Use current event, fall back to latest finished
+    event = await asyncio.to_thread(fetch_event)
+    if not event:
+        events = await asyncio.to_thread(fetch_all_events)
+        finished = [e for e in events if e.get("finished")]
+        if not finished:
+            return "❌ Ingen aktiv eller ferdig runde funnet — ingen picks tilgjengelig ennå."
+        event = max(finished, key=lambda e: e["id"])
+
+    picks_data = await asyncio.to_thread(fetch_entry_picks, entry_id, event["id"])
+    picks = picks_data.get("picks", [])
+    if not picks:
+        return f"❌ Ingen picks funnet for **{entry_name}** i runde {event['id']}."
+
+    hist = picks_data.get("entry_history", {})
+    event_pts = hist.get("points", "?")
+    total_pts = hist.get("total_points", "?")
+
+    bootstrap = await asyncio.to_thread(get_bootstrap_data)
+    player_map = {p["id"]: p for p in bootstrap.get("elements", [])}
+    team_map = {t["id"]: t["name"] for t in bootstrap.get("teams", [])}
+
+    def fmt_player(p):
+        player = player_map.get(p["element"], {})
+        name = f"{player.get('first_name', '')} {player.get('second_name', '')}".strip()
+        team = team_map.get(player.get("team", 0), "?")
+        pos_emoji = TYPE_EMOJI.get(player.get("element_type", 0), "❔")
+        captain = " 👑" if p.get("is_captain") else (" 🥈" if p.get("is_vice_captain") else "")
+        return f"> {pos_emoji} {name} ({team}){captain}"
+
+    starters = sorted([p for p in picks if p["position"] <= 11], key=lambda p: p["position"])
+    bench = sorted([p for p in picks if p["position"] > 11], key=lambda p: p["position"])
+
+    lines = [
+        f"⚽ **{entry_name}** — Runde {event['id']} ({event_pts} poeng | totalt: {total_pts}) (bedt om av {requester_mention})",
+        "",
+        "**Startende 11:**",
+        *[fmt_player(p) for p in starters],
+        "",
+        "**Benk:**",
+        *[fmt_player(p) for p in bench],
+    ]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Command: !claimetlag <lagnavn eller entry_id>
+# ---------------------------------------------------------------------------
+
+@bot.command(name="claimetlag")
+async def claimetlag_cmd(ctx, *, arg: str = None):
+    try:
+        await log_command(ctx, f"!claimetlag {arg or ''}".strip())
+        if not arg:
+            await ctx.send("Bruk: `!claimetlag <lagnavn>` eller `!claimetlag <entry_id>`")
+            return
+
+        server = next((s for s in SERVERS if s["guild_id"] == ctx.guild.id), None)
+        league_id = server.get("league_id") if server else None
+
+        # Resolve entry_id — either a direct number or a name search in league standings
+        entry_id = None
+        entry_name = None
+
+        if arg.strip().isdigit():
+            entry_id = int(arg.strip())
+            # Verify it exists and get the name from standings if possible
+            if league_id:
+                data = await asyncio.to_thread(fetch_league_standings, league_id)
+                match = next(
+                    (r for r in data.get("standings", {}).get("results", [])
+                     if r.get("entry") == entry_id),
+                    None,
+                )
+                entry_name = match["entry_name"] if match else f"Lag #{entry_id}"
+            else:
+                entry_name = f"Lag #{entry_id}"
+        else:
+            if not league_id:
+                await ctx.send("🚫 Ingen liga konfigurert for denne serveren.")
+                return
+            data = await asyncio.to_thread(fetch_league_standings, league_id)
+            query = arg.strip().lower()
+            match = next(
+                (r for r in data.get("standings", {}).get("results", [])
+                 if query in r.get("entry_name", "").lower()),
+                None,
+            )
+            if not match:
+                await ctx.send(f"🚫 Fant ikke lag som inneholder **{arg}** i ligaen.")
+                return
+            entry_id = match["entry"]
+            entry_name = match["entry_name"]
+
+        team_claims.set_claim(ctx.author.id, entry_id, entry_name, ctx.author.name)
+        await ctx.send(f"✅ **{ctx.author.display_name}** er nå koblet til laget **{entry_name}** (entry_id: {entry_id})")
+
+    except Exception as e:
+        await log_error(ctx, f"🛑 Feil i !claimetlag: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Command: !lagetmitt
+# ---------------------------------------------------------------------------
+
+@bot.command(name="lagetmitt")
+async def lagetmitt_cmd(ctx):
+    try:
+        await log_command(ctx, "!lagetmitt")
+        claim = team_claims.get_claim(ctx.author.id)
+        if not claim:
+            await ctx.send("🚫 Du har ikke claimet et lag ennå. Bruk `!claimetlag <lagnavn>`.")
+            return
+
+        msg = await build_picks_message(claim["entry_id"], claim["entry_name"], ctx.author.mention)
+        await ctx_send(ctx, msg)
+
+    except Exception as e:
+        await log_error(ctx, f"🛑 Feil i !lagetmitt: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Command: !lag [@mention | brukernavn]
+# ---------------------------------------------------------------------------
+
+@bot.command(name="lag")
+async def lag_cmd(ctx, *, arg: str = None):
+    try:
+        await log_command(ctx, f"!lag {arg or ''}".strip())
+        if not arg:
+            await ctx.send("Bruk: `!lag @bruker` eller `!lag brukernavn`")
+            return
+
+        claim = None
+        # Check if it's a mention
+        if ctx.message.mentions:
+            target = ctx.message.mentions[0]
+            claim = team_claims.get_claim(target.id)
+            if not claim:
+                await ctx.send(f"🚫 {target.display_name} har ikke claimet et lag ennå.")
+                return
+        else:
+            claim = team_claims.find_by_discord_name(arg.strip())
+            if not claim:
+                await ctx.send(f"🚫 Fant ingen claimet lag for brukernavn **{arg}**.")
+                return
+
+        msg = await build_picks_message(claim["entry_id"], claim["entry_name"], ctx.author.mention)
+        await ctx_send(ctx, msg)
+
+    except Exception as e:
+        await log_error(ctx, f"🛑 Feil i !lag: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Command: !sync  (log channel only)
 # Triggers news_update immediately — fetches fresh bootstrap data and posts
 # any changes to the news channels.
@@ -651,6 +815,9 @@ async def hjelp_cmd(ctx):
             "> `!nyheter [antall]` — Aktive skader og nyheter akkurat nå. Eks: `!nyheter` · `!nyheter 50`\n"
             "> `!skade [lag|antall]` — Skader per lag, eller siste N meldinger. Eks: `!skade Rosenborg` · `!skade 30`\n"
             "> `!rangering` — Vis fullstendig ligatabell med poeng og forrige ukes rangering.\n"
+            "> `!claimetlag <lagnavn>` — Knytt Discord-brukeren din til ditt Fantasy-lag. Eks: `!claimetlag Bakromshelvette`\n"
+            "> `!lagetmitt` — Vis ditt claimede lags nåværende picks.\n"
+            "> `!lag [@mention|brukernavn]` — Vis en annen brukers claimede lag. Eks: `!lag @madcow` · `!lag madcow`\n"
             "> `!påminnelse [log]` — Sender deadline-påminnelse til nyhetskanal. Legg til `log` for å teste hit istedet.\n"
             "> `!sync` — Henter fersk Fantasy-data og poster eventuelle endringer til nyhetskanal nå.\n"
             "> `!update` — Git pull + omstart. *(kun admin)*\n"

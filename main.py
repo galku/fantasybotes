@@ -19,6 +19,7 @@ API_URL = BASE_API_URL + "events/"
 BOOTSTRAP_URL = BASE_API_URL + "bootstrap-static/"
 DREAM_TEAM_URL = BASE_API_URL + "dream-team/"
 LEAGUES_URL = BASE_API_URL + "leagues-classic/"
+ENTRY_URL = BASE_API_URL + "entry/"
 CACHE_FILE = "cache.json"
 BOOTSTRAP_FILE = "bootstrap_cache.json"
 CACHE_TTL_SECONDS = 320 * 60
@@ -192,6 +193,12 @@ def fetch_league_standings(league_id: int) -> dict:
 
     data.setdefault("standings", {})["results"] = all_results
     return data
+
+def fetch_entry_picks(entry_id: int, event_id: int) -> dict:
+    """Return picks for a team in a specific gameweek. Raises on failure."""
+    r = requests.get(ENTRY_URL + str(entry_id) + f"/event/{event_id}/picks/")
+    r.raise_for_status()
+    return r.json()
 
 def post_to_discord(content):
     if not DISCORD_WEBHOOK_URL:
