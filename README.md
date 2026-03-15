@@ -102,36 +102,39 @@ gcloud run services update fantasyesbot --min-instances=1 --max-instances=1
 
 ## Releases / Endringslogg
 
-### v1.5 — Display name i feilmeldinger (mars 2026)
+### v2.3 — Polering og display name (mars 2026)
 - Alle feilmeldinger og tomme-resultat-svar viser nå hvem som kjørte kommandoen (`– **brukernavn**`)
-- Apostrofvarianter normalisert ved lagsøk så `Timothy's Kelnere` og `Timothy's Kelnere` matcher
-- All caching konfigurerbar via `.env` med fornuftige standardverdier
+- Apostrofvarianter normalisert ved lagsøk — `Timothy's Kelnere` og `Timothy's Kelnere` matcher nå
+- All caching konfigurerbar via `.env` med fornuftige standardverdier; API-kall kraftig redusert
 
-### v1.4 — Lagkobling og flause-tabellen (mars 2026)
-- `!flause` — ranger hvem som led mest av dårlige bytter og benkbeslutninger
+### v2.2 — Lagkobling og flause-tabellen (mars 2026)
+- `!flause` — ranger hvem som led mest av dårlige bytter og benkbeslutninger denne runden
 - `!hevdlag` / `!lag` / `!lagetmitt` — koble Discord-bruker til FPL-lag og se picks med live poeng
 - `!lagkobling` — admin-kommando for å koble andre brukere til lag
-- `!rangering` viser Discord-brukernavn i parentes ved siden av lagnavn
-- Duplicate-beskyttelse: boten nekter å overskrive eksisterende lagkobling uten admin
+- `!rangering` viser Discord-brukernavn ved siden av lagnavn
+- Duplikatbeskyttelse: boten nekter å overskrive eksisterende lagkobling uten admin
+- Ligatabell henter nå alle sider (full paginering)
 
-### v1.3 — Paginering og caching (februar 2026)
-- Ligatabell henter alle sider (paginering støtte)
-- `fetch_live_event` og `fetch_entry_picks` lagt til med caching
-- `!lag` krasjer ikke lenger med 404 når runden ikke er spilt ennå
+### v2.1 — Kommandoutvidelser (mars 2026)
+- `!nyheter`, `!skade`, `!sync`, `!update`, `!påminnelse`, `!hjelp` lagt til
+- Fiks GCS fallback-bug som gjorde at `posted_tracker` nullstilte seg ved omstart
+- Nyheter routes til nyhetskanal, systemlogg til log-kanal — aldri blandet
+- `!testdeadline` fjernet, `!sync` erstatter den
 
-### v1.2 — Refaktorering til multi-server bot (januar 2026)
+### v2.0 — Multi-server refaktorering (mars 2026)
 - Full omskriving fra enkeltserver til multi-server via `servers.json`
 - `discord.ext.tasks` erstatter alle cron-jobber og Cloud Scheduler
 - To-kanal-modell per server: nyhetskanal og log-kanal
-- GCS-persistens for `posted_tracker` og `team_claims`
-- `!nyheter`, `!skade`, `!deadline`, `!påminnelse`, `!sync`, `!update` lagt til
+- GCS-persistens for deduplisering av poster på tvers av restarter
+- Deployment til Google Cloud Run
 
-### v1.1 — Grunnleggende bot (desember 2025)
-- Deadline-påminnelser via webhook
-- Spillernyheter og prisendringer via bootstrap-diff
-- Rundesummering med drømmeteam og chipstatistikk
-- Lokal filcache med TTL
+### v1.1 — Bootstrap-diff og caching (mai–juli 2025)
+- `bootstrap_diff.py` integrert — oppdager prisendringer og skader automatisk
+- Lokal filcache med TTL for å redusere API-kall
+- `servers.json` lagt til for server/liga-konfigurasjon
+- Diverse bugfikser i cache-håndtering og logging
 
-### v1.0 — Initial (november 2025)
+### v1.0 — Initial (mai 2025)
 - Grunnleggende Fantasy-bot med Discord webhook
-- Runde-info og spillerdata fra Eliteserien Fantasy API
+- Runde-info, spillerdata og drømmeteam fra Eliteserien Fantasy API
+- Deadline-påminnelser og rundesummering
