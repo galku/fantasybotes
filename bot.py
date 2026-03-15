@@ -14,6 +14,14 @@ from main import (
 )
 import unicodedata
 import team_claims
+import server_state
+
+
+def is_admin(ctx) -> bool:
+    """True if the invoking user is listed as admin for their server."""
+    server = next((s for s in SERVERS if s["guild_id"] == ctx.guild.id), None)
+    admins = server.get("admin_usernames", []) if server else []
+    return ctx.author.name in admins
 
 
 async def _errsend(ctx, msg: str) -> None:
@@ -37,7 +45,6 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 NEWS_INTERVAL_MINUTES = int(os.getenv("NEWS_INTERVAL_MINUTES", "30"))
 DEADLINE_CHECK_INTERVAL = 15  # minutes
-ADMIN_USERNAMES = set(os.getenv("ADMIN_USERNAMES", "galku").split(","))
 
 with open("servers.json") as f:
     SERVERS = json.load(f)
@@ -136,8 +143,10 @@ async def log_to_servers(message: str) -> None:
 
 
 async def news_to_servers(message: str) -> None:
-    """Broadcast a news message to every server's news channel."""
+    """Broadcast a news message to every server's news channel (skips stopped servers)."""
     for server in SERVERS:
+        if not server_state.is_posting(server["guild_id"]):
+            continue
         channel_id = server.get("news_channel_id")
         if channel_id:
             await send_to_channel(channel_id, message)
@@ -158,9 +167,37 @@ async def on_ready():
     news_update.start()
     round_completed_check.start()
 
-    await log_to_servers(
-        f"🤖 **Fantasybot er klar!** PID: `{os.getpid()}` — Nyheter sjekkes hvert {NEWS_INTERVAL_MINUTES}. minutt."
-    )
+    for server in SERVERS:
+        state = server_state.get_state(server["guild_id"])
+        posting = state.get("posting", True)
+        listening = state.get("listening", True)
+        if posting and listening:
+            status = "✅ Aktiv (posting + kommandoer)"
+        elif not listening:
+            status = "🔴 Stoppet — posting og kommandoer av (`!start alt` for å aktivere)"
+        else:
+            status = "⏸️ Posting stoppet, kommandoer aktive (`!start` for å aktivere posting)"
+        log_channel = server.get("log_channel_id")
+        if log_channel:
+            await send_to_channel(
+                log_channel,
+                f"🤖 **Fantasybot er klar!** PID: `{os.getpid()}` — Nyheter sjekkes hvert {NEWS_INTERVAL_MINUTES}. minutt.\n"
+                f"Status for **{server['guild_name']}**: {status}"
+            )
+
+
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CheckFailure):
+        return  # bot is stopped for this guild — silently ignore
+
+
+@bot.check
+async def global_listening_check(ctx):
+    """Block all commands (except !start, !stopp, !update) when listening is off."""
+    if ctx.command and ctx.command.name in ("start", "stopp", "update"):
+        return True
+    return server_state.is_listening(ctx.guild.id)
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +230,8 @@ async def deadline_reminder():
         message_body = await asyncio.to_thread(format_message, event, name_lookup)
 
         for server in SERVERS:
+            if not server_state.is_posting(server["guild_id"]):
+                continue
             role_id = server.get("mention_role_id")
             mention = f"<@&{role_id}>\n" if role_id else ""
             full_message = (
@@ -310,6 +349,8 @@ async def round_completed_check():
 
         # Post league leader for each server
         for server in SERVERS:
+            if not server_state.is_posting(server["guild_id"]):
+                continue
             league_id = server.get("league_id")
             channel_id = server.get("news_channel_id")
             if not league_id or not channel_id:
@@ -497,7 +538,7 @@ async def skade_cmd(ctx, *, arg: str = None):
 
 @bot.command(name="update")
 async def update_cmd(ctx):
-    if ctx.author.name not in ADMIN_USERNAMES:
+    if not is_admin(ctx):
         await log_error(ctx, f"🚫 {ctx.author.mention} har ikke tilgang til `!update`.")
         return
 
@@ -1047,6 +1088,59 @@ async def sync_cmd(ctx):
 
 
 # ---------------------------------------------------------------------------
+# Commands: !stopp [alt] / !start [alt]  (log channel only, admin only)
+# ---------------------------------------------------------------------------
+
+@bot.command(name="stopp")
+async def stopp_cmd(ctx, mode: str = ""):
+    try:
+        server = next((s for s in SERVERS if s["guild_id"] == ctx.guild.id), None)
+        if not server or ctx.channel.id != server.get("log_channel_id"):
+            return
+        if not is_admin(ctx):
+            await log_error(ctx, f"🚫 {ctx.author.mention} har ikke tilgang til `!stopp`.")
+            return
+        await log_command(ctx, f"!stopp {mode}".strip())
+
+        if mode.lower() == "alt":
+            server_state.set_state(server["guild_id"], posting=False, listening=False)
+            await send_to_channel(
+                server["log_channel_id"],
+                f"🔴 **{server['guild_name']}**: Automatisk posting og kommandolytting er **stoppet**. "
+                f"Kjør `!start alt` for å aktivere igjen."
+            )
+        else:
+            server_state.set_state(server["guild_id"], posting=False, listening=True)
+            await send_to_channel(
+                server["log_channel_id"],
+                f"⏸️ **{server['guild_name']}**: Automatisk posting er **stoppet**. "
+                f"Kommandoer fungerer fortsatt. Kjør `!start` for å aktivere posting igjen."
+            )
+    except Exception as e:
+        await log_error(ctx, f"🛑 Feil i !stopp: {e}")
+
+
+@bot.command(name="start")
+async def start_cmd(ctx, mode: str = ""):
+    try:
+        server = next((s for s in SERVERS if s["guild_id"] == ctx.guild.id), None)
+        if not server or ctx.channel.id != server.get("log_channel_id"):
+            return
+        if not is_admin(ctx):
+            await log_error(ctx, f"🚫 {ctx.author.mention} har ikke tilgang til `!start`.")
+            return
+        await log_command(ctx, f"!start {mode}".strip())
+
+        server_state.set_state(server["guild_id"], posting=True, listening=True)
+        await send_to_channel(
+            server["log_channel_id"],
+            f"✅ **{server['guild_name']}**: Automatisk posting og kommandolytting er **aktive** igjen."
+        )
+    except Exception as e:
+        await log_error(ctx, f"🛑 Feil i !start: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Command: !hjelp  (log channel only)
 # Lists all commands with descriptions and examples.
 # ---------------------------------------------------------------------------
@@ -1077,6 +1171,8 @@ async def hjelp_cmd(ctx):
             "> `!lag [@mention|brukernavn]` — Vis et lag. Uten argument: ditt eget. Eks: `!lag @madcow` · `!lag madcow`\n"
             "> `!påminnelse [log]` — Sender deadline-påminnelse til nyhetskanal. Legg til `log` for å teste hit istedet.\n"
             "> `!sync` — Henter fersk Fantasy-data og poster eventuelle endringer til nyhetskanal nå.\n"
+            "> `!stopp [alt]` — Stopper automatisk posting. Med `alt`: stopper også kommandolytting. *(kun admin)*\n"
+            "> `!start` — Aktiverer posting og kommandolytting igjen. *(kun admin)*\n"
             "> `!update` — Git pull + omstart. *(kun admin)*\n"
             "> `!hjelp` — Denne meldingen. *(kun fra log-kanal)*\n"
         )

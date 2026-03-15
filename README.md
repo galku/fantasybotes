@@ -29,7 +29,9 @@ Discord-bot for **Eliteserien Fantasy** som holder ligaene oppdatert med rundein
 | `!lag [@mention\|brukernavn]` | Vis et lag. Uten argument: ditt eget. Eks: `!lag @madcow` · `!lag madcow` |
 | `!påminnelse [log]` | Send deadlinepåminnelse til nyhetskanal nå. Legg til `log` for å teste i log-kanal |
 | `!sync` | Henter fersk Fantasy-data og poster eventuelle endringer til nyhetskanal nå |
-| `!lagkobling @bruker <lagnavn>` | Admin: koble en bruker til et lag *(kun fra log-kanal)* |
+| `!stopp [alt]` | Stopper automatisk posting. Med `alt`: stopper også kommandolytting *(kun admin, log-kanal)* |
+| `!start` | Aktiverer posting og kommandolytting igjen *(kun admin, log-kanal)* |
+| `!lagkobling @bruker <lagnavn>` | Koble en bruker til et lag *(kun admin, log-kanal)* |
 | `!update` | Git pull + omstart *(kun admin)* |
 | `!hjelp` | Vis kommandooversikt *(kun fra log-kanal)* |
 
@@ -101,6 +103,13 @@ gcloud run services update fantasyesbot --min-instances=1 --max-instances=1
 ---
 
 ## Releases / Endringslogg
+
+### v2.4 — Per-server stopp/start og admin fra servers.json (mars 2026)
+- `!stopp [alt]` — stopper automatisk posting, med `alt` også kommandolytting
+- `!start` — aktiverer posting og kommandolytting igjen
+- Admin-brukere konfigureres nå per server i `servers.json` (ikke lenger env-var)
+- Boten poster per-server statusmelding til log-kanal ved oppstart etter restart
+- Stoppet tilstand overlever restart via GCS-persistent `server_state.json`
 
 ### v2.3 — Polering og display name (mars 2026)
 - Alle feilmeldinger og tomme-resultat-svar viser nå hvem som kjørte kommandoen (`– **brukernavn**`)
