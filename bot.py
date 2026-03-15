@@ -16,6 +16,11 @@ import unicodedata
 import team_claims
 
 
+async def _errsend(ctx, msg: str) -> None:
+    """Send a failure/empty-result reply tagged with the caller's display name."""
+    await ctx.send(f"{msg.rstrip('.')} – **{ctx.author.display_name}**.")
+
+
 def _norm(text: str) -> str:
     """Normalize apostrophes/quotes to straight ' for fuzzy name matching."""
     text = unicodedata.normalize("NFKD", text)
@@ -379,7 +384,7 @@ async def nyheter_cmd(ctx, antall: str = "20"):
     try:
         await log_command(ctx, f"!nyheter {antall}")
         if not antall.isdigit():
-            await ctx.send("Bruk: `!nyheter [antall]` — f.eks. `!nyheter 50`")
+            await _errsend(ctx, "Bruk: `!nyheter [antall]` — f.eks. `!nyheter 50`")
             return
 
         n = min(int(antall), 200)
@@ -391,7 +396,7 @@ async def nyheter_cmd(ctx, antall: str = "20"):
         ]
 
         if not players_with_news:
-            await ctx.send("✅ Ingen spillere med aktive nyheter/skader akkurat nå.")
+            await _errsend(ctx, "✅ Ingen spillere med aktive nyheter/skader akkurat nå")
             return
 
         # Sort by team name, then player name
@@ -428,7 +433,7 @@ async def skade_cmd(ctx, *, arg: str = None):
     try:
         await log_command(ctx, f"!skade {arg or ''}".strip())
         if arg is None:
-            await ctx.send(
+            await _errsend(ctx,
                 "Bruk:\n"
                 "> `!skade [lagnavn]` — vis skader for et spesifikt lag\n"
                 "> `!skade [antall]` — vis siste N skademeldinger"
@@ -442,7 +447,7 @@ async def skade_cmd(ctx, *, arg: str = None):
             n = min(int(arg), 100)
             entries = await asyncio.to_thread(news_log.get_recent, n, "news")
             if not entries:
-                await ctx.send("Ingen skademeldinger logget ennå.")
+                await _errsend(ctx, "Ingen skademeldinger logget ennå")
                 return
             lines = [f"<t:{e['ts']}:d> {e['text']}" for e in entries]
             message = f"🏥 **Siste {len(lines)} skademeldinger:** (bedt om av {ctx.author.mention})\n" + "\n".join(lines)
@@ -457,7 +462,7 @@ async def skade_cmd(ctx, *, arg: str = None):
             None,
         )
         if not matched_team:
-            await ctx.send(f"🚫 Fant ikke lag som inneholder **{arg}**.")
+            await _errsend(ctx, f"🚫 Fant ikke lag som inneholder **{arg}**")
             return
 
         injured = [
@@ -466,7 +471,7 @@ async def skade_cmd(ctx, *, arg: str = None):
         ]
 
         if not injured:
-            await ctx.send(f"✅ Ingen skade/forfall-meldinger for **{matched_team['name']}**.")
+            await _errsend(ctx, f"✅ Ingen skade/forfall-meldinger for **{matched_team['name']}**")
             return
 
         lines = []
@@ -660,7 +665,7 @@ async def flause_cmd(ctx):
         server = next((s for s in SERVERS if s["guild_id"] == ctx.guild.id), None)
         league_id = server.get("league_id") if server else None
         if not league_id:
-            await ctx.send("🚫 Ingen liga konfigurert for denne serveren.")
+            await _errsend(ctx, "🚫 Ingen liga konfigurert for denne serveren")
             return
 
         # Resolve current event (or latest finished)
@@ -669,7 +674,7 @@ async def flause_cmd(ctx):
             events = await asyncio.to_thread(fetch_all_events)
             finished = [e for e in events if e.get("finished")]
             if not finished:
-                await ctx.send("❌ Ingen runde tilgjengelig ennå.")
+                await _errsend(ctx, "❌ Ingen runde tilgjengelig ennå")
                 return
             event = max(finished, key=lambda e: e["id"])
 
@@ -746,7 +751,7 @@ async def flause_cmd(ctx):
             rows.append((total_loss, label, entry_name, transfer_lines, bench_lines))
 
         if not rows:
-            await ctx.send(f"🌟 Ingen flause i **{league_name}** denne runden!")
+            await _errsend(ctx, f"🌟 Ingen flause i **{league_name}** denne runden")
             return
 
         rows.sort(key=lambda x: x[0])  # worst first (most negative)
@@ -843,7 +848,7 @@ async def hevdlag_cmd(ctx, *, arg: str = None):
     try:
         await log_command(ctx, f"!hevdlag {arg or ''}".strip())
         if not arg:
-            await ctx.send("Bruk: `!hevdlag <lagnavn>` eller `!hevdlag <entry_id>`")
+            await _errsend(ctx, "Bruk: `!hevdlag <lagnavn>` eller `!hevdlag <entry_id>`")
             return
 
         server = next((s for s in SERVERS if s["guild_id"] == ctx.guild.id), None)
@@ -868,7 +873,7 @@ async def hevdlag_cmd(ctx, *, arg: str = None):
                 entry_name = f"Lag #{entry_id}"
         else:
             if not league_id:
-                await ctx.send("🚫 Ingen liga konfigurert for denne serveren.")
+                await _errsend(ctx, "🚫 Ingen liga konfigurert for denne serveren")
                 return
             data = await asyncio.to_thread(fetch_league_standings, league_id)
             query = _norm(arg.strip())
@@ -878,14 +883,14 @@ async def hevdlag_cmd(ctx, *, arg: str = None):
                 None,
             )
             if not match:
-                await ctx.send(f"🚫 Fant ikke lag som inneholder **{arg}** i ligaen.")
+                await _errsend(ctx, f"🚫 Fant ikke lag som inneholder **{arg}** i ligaen")
                 return
             entry_id = match["entry"]
             entry_name = match["entry_name"]
 
         existing = team_claims.find_by_entry_id(entry_id)
         if existing and existing.get("discord_name") != ctx.author.name:
-            await ctx.send(f"🚫 **{entry_name}** er allerede koblet til **{existing['discord_name']}**.")
+            await _errsend(ctx, f"🚫 **{entry_name}** er allerede koblet til **{existing['discord_name']}**")
             return
 
         team_claims.set_claim(ctx.author.id, entry_id, entry_name, ctx.author.name)
@@ -905,7 +910,7 @@ async def lagetmitt_cmd(ctx):
         await log_command(ctx, "!lagetmitt")
         claim = team_claims.get_claim(ctx.author.id)
         if not claim:
-            await ctx.send("🚫 Du har ikke claimet et lag ennå. Bruk `!claimetlag <lagnavn>`.")
+            await _errsend(ctx, "🚫 Du har ikke claimet et lag ennå. Bruk `!claimetlag <lagnavn>`")
             return
 
         msg = await build_picks_message(claim["entry_id"], claim["entry_name"], ctx.author.mention)
@@ -928,7 +933,7 @@ async def lag_cmd(ctx, *, arg: str = None):
         if not arg:
             claim = team_claims.get_claim(ctx.author.id)
             if not claim:
-                await ctx.send("🚫 Du har ikke koblet deg til et lag ennå. Bruk `!hevdlag <lagnavn>` for å gjøre det.")
+                await _errsend(ctx, "🚫 Du har ikke koblet deg til et lag ennå. Bruk `!hevdlag <lagnavn>` for å gjøre det")
                 return
             msg = await build_picks_message(claim["entry_id"], claim["entry_name"], ctx.author.mention)
             await ctx_send(ctx, msg)
@@ -939,12 +944,12 @@ async def lag_cmd(ctx, *, arg: str = None):
             target = ctx.message.mentions[0]
             claim = team_claims.get_claim(target.id)
             if not claim:
-                await ctx.send(f"🚫 {target.display_name} har ikke koblet seg til et lag ennå.")
+                await _errsend(ctx, f"🚫 {target.display_name} har ikke koblet seg til et lag ennå")
                 return
         else:
             claim = team_claims.find_by_discord_name(arg.strip())
             if not claim:
-                await ctx.send(f"🚫 Fant ingen kobling for brukernavn **{arg}**.")
+                await _errsend(ctx, f"🚫 Fant ingen kobling for brukernavn **{arg}**")
                 return
 
         msg = await build_picks_message(claim["entry_id"], claim["entry_name"], ctx.author.mention)
