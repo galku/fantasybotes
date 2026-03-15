@@ -12,7 +12,16 @@ from main import (
     get_name_lookup, format_message, get_bootstrap_data,
     fetch_league_standings, fetch_entry_picks, fetch_live_event,
 )
+import unicodedata
 import team_claims
+
+
+def _norm(text: str) -> str:
+    """Normalize apostrophes/quotes to straight ' for fuzzy name matching."""
+    text = unicodedata.normalize("NFKD", text)
+    for ch in "\u2019\u2018\u02bc\u0060\u00b4\u2032\u02b9\uff07\u201a\u201b":
+        text = text.replace(ch, "'")
+    return text.lower()
 from bootstrap_diff import compare_players, fetch_bootstrap_data, load_previous_data
 from cache_utils import save_cache
 from posted_tracker import has_been_posted, mark_as_posted
@@ -862,10 +871,10 @@ async def hevdlag_cmd(ctx, *, arg: str = None):
                 await ctx.send("🚫 Ingen liga konfigurert for denne serveren.")
                 return
             data = await asyncio.to_thread(fetch_league_standings, league_id)
-            query = arg.strip().lower()
+            query = _norm(arg.strip())
             match = next(
                 (r for r in data.get("standings", {}).get("results", [])
-                 if query in r.get("entry_name", "").lower()),
+                 if query in _norm(r.get("entry_name", ""))),
                 None,
             )
             if not match:
@@ -982,10 +991,10 @@ async def lagkobling_cmd(ctx, member: discord.Member, *, entry_name_or_id: str):
                 await send_to_channel(server["log_channel_id"], "🚫 Ingen liga konfigurert for denne serveren.")
                 return
             data = await asyncio.to_thread(fetch_league_standings, league_id)
-            query = entry_name_or_id.strip().lower()
+            query = _norm(entry_name_or_id.strip())
             match = next(
                 (r for r in data.get("standings", {}).get("results", [])
-                 if query in r.get("entry_name", "").lower()),
+                 if query in _norm(r.get("entry_name", ""))),
                 None,
             )
             if not match:
